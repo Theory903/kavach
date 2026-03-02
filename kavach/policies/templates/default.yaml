@@ -1,0 +1,84 @@
+version: "1.0"
+
+roles:
+  analyst:
+    allowed_tools:
+      - search
+      - summarize
+      - read_file
+    blocked_tools:
+      - send_email
+      - export_data
+      - delete_record
+    data_scope:
+      - "reports/*"
+      - "public/*"
+    max_risk_score: 0.5
+    require_approval_above: 0.7
+
+  admin:
+    allowed_tools:
+      - "*"
+    blocked_tools:
+      - delete_production_db
+    data_scope:
+      - "*"
+    max_risk_score: 0.8
+    require_approval_above: 0.9
+
+  system:
+    allowed_tools:
+      - "*"
+    data_scope:
+      - "*"
+    max_risk_score: 0.9
+    require_approval_above: 0.95
+
+rules:
+  - id: injection_always_block
+    condition: "injection_score > 0.8"
+    action: block
+    reason: "High-confidence prompt injection detected"
+    priority: 100
+
+  - id: jailbreak_block
+    condition: "jailbreak_score > 0.7"
+    action: block
+    reason: "Jailbreak attempt detected"
+    priority: 90
+
+  - id: exfiltration_block_analyst
+    condition: "role == 'analyst' AND exfiltration_score > 0.5"
+    action: block
+    reason: "Data exfiltration not permitted for analyst role"
+    priority: 80
+
+  - id: medium_risk_sanitize
+    condition: "risk_score >= 0.4 AND risk_score <= 0.7"
+    action: sanitize
+    reason: "Medium risk — sanitizing prompt before execution"
+    priority: 50
+
+  - id: high_risk_escalate
+    condition: "risk_score > 0.7 AND role != 'admin'"
+    action: require_approval
+    reason: "High risk — requires admin approval before execution"
+    priority: 60
+
+detection:
+  injection_patterns: true
+  jailbreak_patterns: true
+  pii_detection: true
+  secret_detection: true
+  exfiltration_intent: true
+
+output_guard:
+  scan_for_secrets: true
+  scan_tool_calls: true
+  block_unknown_tools: true
+
+observability:
+  log_prompts: hashed
+  log_decisions: true
+  log_tool_calls: true
+  otel_endpoint: null
