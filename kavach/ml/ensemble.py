@@ -15,6 +15,7 @@ from kavach.ml.behavioral import BehavioralTracker
 from kavach.ml.classifiers import MLEnsembleClassifier, _HAS_SKLEARN
 from kavach.ml.embeddings import EmbeddingRiskScorer, _HAS_ONNX
 from kavach.ml.features import extract_features
+from kavach.ml.intent import IntentClassifier
 from kavach.ml.redis_behavioral import RedisBehavioralTracker, _HAS_REDIS
 import kavach.observability.prometheus as prom
 
@@ -43,17 +44,18 @@ class EnsembleRiskScorer:
     ) -> None:
         """Initialize the ensemble."""
         self.ml_timeout_seconds = ml_timeout_seconds
-        
+
         if use_redis and _HAS_REDIS:
             self._behavioral = RedisBehavioralTracker(redis_url=redis_url)
         else:
             if use_redis:
                 logger.warning("Redis requested but redis-py not installed. Falling back to in-memory tracker.")
             self._behavioral = BehavioralTracker()
-        
+
         self.ml_classifier: MLEnsembleClassifier | None = None
         self.embedding_scorer: EmbeddingRiskScorer | None = None
-        
+        self.intent_classifier = IntentClassifier()
+
         self.is_ml_active = False
         
         if enable_ml and _HAS_SKLEARN:
@@ -68,49 +70,50 @@ class EnsembleRiskScorer:
             self.is_ml_active = True
 
     def _blend_scores(
-        self, 
-        rule_score: float, 
-        ml_score: float, 
-        emb_score: float, 
+        self,
+        rule_score: float,
+        ml_score: float,
+        emb_score: float,
+        intent_score: float,
         multiplier: float
     ) -> float:
-        """Weights and aggregates the signals.
+        """Weights and aggregates all signals into a final risk score.
         
-        Rule score is deterministic and gets highest weight if strong.
+        Rule score is deterministic and takes precedence when high-confidence.
         """
-        # If rules caught a severe 1.0 injection, don't let ML dilute it.
         if rule_score > 0.8:
-            base_score = max(rule_score, ml_score)
+            base_score = max(rule_score, ml_score, intent_score)
         else:
-            # Weighted average
             total_weight = 0.0
             sum_weighted = 0.0
-            
-            # Rule weight: 0.4
-            sum_weighted += rule_score * 0.4
-            total_weight += 0.4
-            
-            # ML weight: 0.35 (if active)
+
+            # Rule weight: 0.35
+            sum_weighted += rule_score * 0.35
+            total_weight += 0.35
+
+            # ML classifier weight: 0.30
             if self.ml_classifier is not None and self.ml_classifier.is_trained:
-                sum_weighted += ml_score * 0.35
-                total_weight += 0.35
-                
-            # Embedding weight: 0.25 (if active)
+                sum_weighted += ml_score * 0.30
+                total_weight += 0.30
+
+            # Embedding similarity weight: 0.20
             if self.embedding_scorer is not None and self.embedding_scorer.is_loaded:
-                sum_weighted += emb_score * 0.25
-                total_weight += 0.25
-                
+                sum_weighted += emb_score * 0.20
+                total_weight += 0.20
+
+            # SLM intent weight: 0.15
+            if self.intent_classifier.is_loaded:
+                sum_weighted += intent_score * 0.15
+                total_weight += 0.15
+
             base_score = sum_weighted / total_weight if total_weight > 0 else rule_score
-            
-        # Apply behavioral multiplier
-        final = base_score * multiplier
-        
-        return min(max(final, 0.0), 1.0)
+
+        return min(max(base_score * multiplier, 0.0), 1.0)
 
     def analyze(
-        self, 
-        prompt: str, 
-        rule_signals: dict[str, float], 
+        self,
+        prompt: str,
+        rule_signals: dict[str, float],
         identity: Identity
     ) -> dict[str, Any]:
         """Run the full ensemble scoring pipeline.
@@ -121,64 +124,78 @@ class EnsembleRiskScorer:
             identity: The user identity to apply behavioral history.
             
         Returns:
-            Dict containing final_score and a breakdown of components.
+            Dict containing final_score and a full breakdown of all components.
         """
-        # 1. Base rule score (max of all rule detectors)
         rule_score = max(rule_signals.values()) if rule_signals else 0.0
-        
+
         ml_score = 0.0
         emb_score = 0.0
-        ml_breakdown = {}
-        
-        # Time the ML features and ONNX embedding components
+        intent_score = 0.0
+        ml_breakdown: dict[str, Any] = {}
+        intent_result: dict[str, Any] = {}
+
         with prom.latency_timer(prom.KAVACH_ML_INFERENCE_TIME):
-            def _ml_task() -> tuple[float, float, dict[str, Any]]:
+            def _ml_task() -> tuple[float, float, dict[str, Any], dict[str, Any]]:
                 m_score = 0.0
                 e_score = 0.0
-                m_break = {}
-                # 2. Extract features and run ML Classifiers
+                m_break: dict[str, Any] = {}
+                i_result: dict[str, Any] = {}
+
                 if self.ml_classifier is not None and self.ml_classifier.is_trained:
                     features = extract_features(prompt)
                     m_break = self.ml_classifier.predict_risk(features)
                     m_score = m_break.get("ensemble_risk", 0.0)
-                    
-                # 3. Run Embedding Similarity
+
                 if self.embedding_scorer is not None and self.embedding_scorer.is_loaded:
                     e_score = self.embedding_scorer.predict_risk(prompt)
-                
-                return m_score, e_score, m_break
+
+                # SLM intent classification runs concurrently with embeddings
+                if self.intent_classifier.is_loaded:
+                    i_result = self.intent_classifier.classify(prompt)
+
+                return m_score, e_score, m_break, i_result
 
             try:
-                # 50ms strict threshold execution
                 future = _ML_EXECUTOR.submit(_ml_task)
-                ml_score, emb_score, ml_breakdown = future.result(timeout=self.ml_timeout_seconds)
+                ml_score, emb_score, ml_breakdown, intent_result = future.result(
+                    timeout=self.ml_timeout_seconds
+                )
+                intent_score = intent_result.get("risk_score", 0.0)
             except concurrent.futures.TimeoutError:
-                logger.warning(f"ML Inference exceeded {self.ml_timeout_seconds}s timeout. Falling back to rule-based scoring.")
+                logger.warning(
+                    "ML Inference exceeded %.3fs timeout. Using rule-based scoring only.",
+                    self.ml_timeout_seconds
+                )
             except Exception as e:
-                logger.error(f"ML Inference failed: {e}. Falling back to rule-based scoring.")
-            
-        # 4. Get behavioral adjustment
+                logger.error("ML Inference pipeline error: %s. Falling back to rules.", e)
+
         multiplier = self._behavioral.get_behavioral_multiplier(identity.user_id)
-        
-        # 5. Aggregate
-        final_score = self._blend_scores(rule_score, ml_score, emb_score, multiplier)
-        
+        final_score = self._blend_scores(rule_score, ml_score, emb_score, intent_score, multiplier)
+
         breakdown = {
             "final_score": float(final_score),
             "components": {
                 "rule_score": float(rule_score),
                 "ml_classifier_score": float(ml_score),
                 "embedding_sim_score": float(emb_score),
+                "intent_score": float(intent_score),
                 "behavioral_multiplier": float(multiplier),
             },
-            "rule_signals": rule_signals
+            "rule_signals": rule_signals,
         }
-        
+
         if ml_breakdown:
             breakdown["components"]["ml_details"] = ml_breakdown
-            
+
+        if intent_result.get("slm_active"):
+            breakdown["components"]["intent_analysis"] = {
+                "predicted_category": intent_result.get("predicted_category"),
+                "confidence": intent_result.get("confidence"),
+                "all_scores": intent_result.get("all_scores", {}),
+            }
+
         return breakdown
 
     def update_behavior(self, user_id: str, risk_score: float, action: str) -> None:
-        """Update behavioral tracker after action is taken."""
+        """Update the behavioral tracker after an action is taken."""
         self._behavioral.record_interaction(user_id, risk_score, action)

@@ -132,6 +132,28 @@ docker run -p 8000:8000 \
 
 ---
 
+## 🧠 Semantic Intent Engine (SLM) & Live Training
+
+Kavach includes an optional small language model (SLM) that runs locally to classify semantic intent (easiest way to catch deeply obfuscated steganography).
+
+Enable it by installing the `slm` extras:
+```bash
+pip install "kavach[slm,ml]"
+```
+This automatically downloads a 66M parameter DistilBERT zero-shot classifier running entirely local and entirely offline.
+
+### Continuous Learning (Retraining the Ensemble)
+
+The best defense is continuous adaptation. Build your own models on fresh datasets. Kavach includes a native trainer CLI that downloads leading, open HuggingFace datasets (prompt injections, jailbreaks) and retrains the entire gating ensemble.
+
+```bash
+# Creates data/trained_models/ containing gbm.pkl, lr.pkl, iforest.pkl
+python -m kavach.ml.trainer --save-path data/trained_models
+```
+Simply map this volume to `/etc/kavach/models` when deploying the proxy.
+
+---
+
 ## 🛡️ Policy Definition (`policy.yaml`)
 
 Define deterministic enforcement rules for your agents and human users. 

@@ -8,6 +8,8 @@ a fast, accurate ensemble.
 from __future__ import annotations
 
 import logging
+import pickle
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -37,9 +39,9 @@ class MLEnsembleClassifier:
     3. IsolationForest (unsupervised anomaly detection)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, pretrained_dir: str | None = None) -> None:
         self.is_trained = False
-        
+
         if not _HAS_SKLEARN:
             logger.warning("scikit-learn not installed. MLEnsembleClassifier disabled.")
             return
@@ -55,6 +57,39 @@ class MLEnsembleClassifier:
             contamination=0.1, random_state=42
         )
         self._scaler = StandardScaler()
+
+        # Try to load persisted artifacts from a previous training run
+        if pretrained_dir and self.try_load_pretrained(Path(pretrained_dir)):
+            logger.info("Loaded pretrained models from %s", pretrained_dir)
+        elif pretrained_dir:
+            logger.warning("Pretrained artifacts not found at %s. Will train on bundled dataset.", pretrained_dir)
+
+    def try_load_pretrained(self, save_dir: Path) -> bool:
+        """Load persisted model artifacts from a previous `trainer.py` run.
+        
+        Returns True if artifacts were found and loaded successfully.
+        """
+        if not _HAS_SKLEARN:
+            return False
+
+        required = ["gbm.pkl", "lr.pkl", "iforest.pkl", "scaler.pkl"]
+        if not all((save_dir / f).exists() for f in required):
+            return False
+
+        try:
+            with open(save_dir / "gbm.pkl", "rb") as f:
+                self._gbm = pickle.load(f)
+            with open(save_dir / "lr.pkl", "rb") as f:
+                self._lr = pickle.load(f)
+            with open(save_dir / "iforest.pkl", "rb") as f:
+                self._iforest = pickle.load(f)
+            with open(save_dir / "scaler.pkl", "rb") as f:
+                self._scaler = pickle.load(f)
+            self.is_trained = True
+            return True
+        except Exception as e:
+            logger.error("Failed to load pretrained artifacts: %s", e)
+            return False
 
     def train_on_bundled_dataset(self) -> None:
         """Train models on the bundled dataset in kavach.ml.dataset."""

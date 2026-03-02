@@ -4,19 +4,19 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kavach"
-version = "0.1.0"
+version = "0.2.0"
 description = "The security and permission layer for agentic AI systems"
 readme = "README.md"
-license = "MIT"
+license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
     { name = "Abhishek Jha" },
 ]
-keywords = ["ai", "security", "agents", "llm", "prompt-injection", "rbac"]
+keywords = ["ai", "security", "agents", "llm", "prompt-injection", "rbac", "zero-trust"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -48,12 +48,17 @@ ml = [
     "tokenizers>=0.14",
     "huggingface-hub>=0.20",
     "redis>=5.0",
+    "datasets>=2.14",
 ]
 openai = ["openai>=1.0"]
 anthropic = ["anthropic>=0.20"]
 langchain = ["langchain-core>=0.1"]
+slm = [
+    "transformers>=4.35",
+    "torch>=2.0",
+]
 all = [
-    "kavach[openai,anthropic,langchain,ml]",
+    "kavach[openai,anthropic,langchain,ml,slm]",
 ]
 
 [project.urls]

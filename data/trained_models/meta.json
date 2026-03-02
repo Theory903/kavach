@@ -1,0 +1,7 @@
+{
+  "n_train": 166,
+  "n_test": 30,
+  "n_features": 30,
+  "attack_ratio": 0.7397959183673469,
+  "gbm_test_accuracy": 0.9
+}
