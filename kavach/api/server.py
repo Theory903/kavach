@@ -27,7 +27,7 @@ limiter = Limiter(key_func=get_remote_address)
 class AnalyzeRequest(BaseModel):
     """Request body for /v1/analyze and /v1/secure-run."""
 
-    prompt: str = Field(..., description="The prompt to analyze")
+    prompt: str = Field(..., max_length=32000, description="The prompt to analyze")
     user_id: str = Field(default="anonymous", description="User identifier")
     role: str = Field(default="default", description="User role for RBAC")
     session_id: str | None = Field(default=None, description="Optional session ID")
@@ -36,7 +36,7 @@ class AnalyzeRequest(BaseModel):
 class SanitizeRequest(BaseModel):
     """Request body for /v1/sanitize."""
 
-    prompt: str = Field(..., description="The prompt to sanitize")
+    prompt: str = Field(..., max_length=32000, description="The prompt to sanitize")
 
 
 class DecisionResponse(BaseModel):

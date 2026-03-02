@@ -42,6 +42,37 @@ class RedisBehavioralTracker:
             self._redis = redis.Redis.from_url(redis_url, decode_responses=True)
             self._redis.ping()
             self.is_connected = True
+            
+            # Preload Lua script for atomic sliding window modifications
+            self._record_script = """
+            local state_key = KEYS[1]
+            local list_key = KEYS[2]
+            
+            local risk_score = tonumber(ARGV[1])
+            local is_block = tonumber(ARGV[2])
+            local timestamp = ARGV[3]
+            local history_size = tonumber(ARGV[4])
+            local ttl = tonumber(ARGV[5])
+            
+            redis.call('HINCRBY', state_key, 'request_count', 1)
+            redis.call('HINCRBYFLOAT', state_key, 'total_risk', risk_score)
+            
+            if is_block == 1 then
+                redis.call('HINCRBY', state_key, 'violation_count', 1)
+            end
+            
+            redis.call('HSET', state_key, 'last_seen_ts', timestamp)
+            
+            redis.call('RPUSH', list_key, ARGV[1])
+            redis.call('LTRIM', list_key, -history_size, -1)
+            
+            redis.call('EXPIRE', state_key, ttl)
+            redis.call('EXPIRE', list_key, ttl)
+            
+            return 1
+            """
+            self._record_sha = self._redis.script_load(self._record_script)
+            
         except Exception as e:
             logger.error("Failed to connect to Redis for behavioral tracking: %s", e)
 
@@ -52,36 +83,42 @@ class RedisBehavioralTracker:
         return f"kavach:user_history:{user_id}"
 
     def record_interaction(self, user_id: str, risk_score: float, action_taken: str) -> None:
-        """Update state after an interaction, in a pipelined Redis transaction."""
+        """Update state after an interaction atomically via loaded Lua script."""
         if user_id == "anonymous" or not self.is_connected or not self._redis:
             return
 
         state_key = self._get_user_key(user_id)
         list_key = self._get_list_key(user_id)
+        is_block = 1 if action_taken == "block" else 0
         
         try:
-            pipe = self._redis.pipeline()
-            
-            # Increment basic counters
-            pipe.hincrby(state_key, "request_count", 1)
-            pipe.hincrbyfloat(state_key, "total_risk", risk_score)
-            
-            if action_taken == "block":
-                pipe.hincrby(state_key, "violation_count", 1)
-                
-            pipe.hset(state_key, "last_seen_ts", time.time())
-            
-            # Update rolling history
-            pipe.rpush(list_key, str(risk_score))
-            pipe.ltrim(list_key, -self._history_size, -1)
-            
-            # Set TTLs
-            pipe.expire(state_key, self._ttl)
-            pipe.expire(list_key, self._ttl)
-            
-            pipe.execute()
+            self._redis.evalsha(
+                self._record_sha, 
+                2, 
+                state_key, 
+                list_key, 
+                str(risk_score), 
+                is_block, 
+                time.time(), 
+                self._history_size, 
+                self._ttl
+            )
+        except redis.exceptions.NoScriptError:
+            # Re-compile if Redis wiped script cache locally
+            self._record_sha = self._redis.script_load(self._record_script)
+            self._redis.evalsha(
+                self._record_sha, 
+                2, 
+                state_key, 
+                list_key, 
+                str(risk_score), 
+                is_block, 
+                time.time(), 
+                self._history_size, 
+                self._ttl
+            )
         except Exception as e:
-            logger.error("Redis record failed: %s", e)
+            logger.error("Redis Lua record script failed: %s", e)
 
     def get_behavioral_multiplier(self, user_id: str) -> float:
         """Calculate a risk multiplier based on decentralized history."""
