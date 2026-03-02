@@ -8,13 +8,18 @@ Provides REST endpoints for non-Python stacks to use Kavach:
 - GET /v1/metrics — get runtime metrics
 """
 
-from __future__ import annotations
+from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from kavach.core.gateway import KavachGateway
+
+limiter = Limiter(key_func=get_remote_address)
 
 
 # --- Request / Response Models ---
@@ -65,6 +70,9 @@ def create_app(policy: str | None = None) -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
     )
+    
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
     app.add_middleware(
         CORSMiddleware,
@@ -79,37 +87,40 @@ def create_app(policy: str | None = None) -> FastAPI:
     # --- Routes ---
 
     @app.post("/v1/analyze", response_model=DecisionResponse)
-    async def analyze_prompt(request: AnalyzeRequest) -> dict:
+    @limiter.limit("100/minute")
+    async def analyze_prompt(request: Request, payload: AnalyzeRequest) -> dict:
         """Analyze a prompt without executing — returns security decision."""
         result = gateway.analyze(
-            prompt=request.prompt,
-            user_id=request.user_id,
-            role=request.role,
-            session_id=request.session_id,
+            prompt=payload.prompt,
+            user_id=payload.user_id,
+            role=payload.role,
+            session_id=payload.session_id,
         )
         return result
 
     @app.post("/v1/secure-run", response_model=DecisionResponse)
-    async def secure_run(request: AnalyzeRequest) -> dict:
+    @limiter.limit("100/minute")
+    async def secure_run(request: Request, payload: AnalyzeRequest) -> dict:
         """Full guarded execution pipeline.
 
         Note: In API mode without an LLM callback, this behaves
         like /analyze but with the full pipeline metadata.
         """
         result = gateway.secure_call(
-            prompt=request.prompt,
-            user_id=request.user_id,
-            role=request.role,
-            session_id=request.session_id,
+            prompt=payload.prompt,
+            user_id=payload.user_id,
+            role=payload.role,
+            session_id=payload.session_id,
         )
         return result
 
     @app.post("/v1/sanitize")
-    async def sanitize_prompt(request: SanitizeRequest) -> dict:
+    @limiter.limit("200/minute")
+    async def sanitize_prompt(request: Request, payload: SanitizeRequest) -> dict:
         """Just sanitize a prompt — no policy evaluation."""
-        clean = gateway.sanitize_prompt(request.prompt)
+        clean = gateway.sanitize_prompt(payload.prompt)
         return {
-            "original_length": len(request.prompt),
+            "original_length": len(payload.prompt),
             "clean_length": len(clean),
             "clean_prompt": clean,
         }

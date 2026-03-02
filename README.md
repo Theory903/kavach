@@ -1,8 +1,8 @@
-# 🛡️ Kavach — Auth + Firewall for AI Agents
+# 🛡️ Kavach — Zero-Trust AI Security Gateway
 
-**The security and permission layer every agentic AI stack needs.**
+**A zero-trust AI security gateway that enforces policy, detects adversarial prompts, and secures agent actions in real time.**
 
-Kavach wraps your existing AI clients (OpenAI, Anthropic, LangChain) with identity enforcement, input/output guards, tool permission controls, and policy-based decision making — **zero learning curve, <15ms overhead**.
+Kavach is a policy-driven security layer for LLM applications and agentic systems. It combines ensemble ML risk scoring, adversarial input detection, and strict tool-level permission enforcement to prevent prompt injection, data exfiltration, and unsafe actions. Designed with zero-trust principles, it integrates as a gateway or sidecar to secure AI systems in production environments.
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -11,12 +11,22 @@ Kavach wraps your existing AI clients (OpenAI, Anthropic, LangChain) with identi
 │  Core Engine │  Integrations│   Enterprise Control  │
 │              │              │                       │
 │ • Identity   │ • OpenAI     │ • Policy Engine       │
-│ • Input Guard│ • Anthropic  │ • Audit Logging       │
-│ • Tool Guard │ • LangChain  │ • RBAC                │
-│ • Output Guard│             │ • Metrics             │
-│ • Risk Scorer│              │ • Alerting            │
+│ • Input Guard│ • Anthropic  │ • Immutable Audit Logs│
+│ • Tool Guard │ • LangChain  │ • Service Level Objs  │
+│ • Output Guard│             │ • Prometheus Metrics  │
+│ • ML Ensemble│              │ • Alerting            │
 └──────────────┴──────────────┴───────────────────────┘
 ```
+
+---
+
+## Service Level Objectives (SLOs)
+
+Designed for regulated environments, Kavach operates within strict latency and reliability tolerances:
+- **p50 latency:** < 50ms
+- **p95 latency:** < 120ms
+- **Error rate:** < 0.1%
+- **Uptime Target:** 99.9%
 
 ---
 
