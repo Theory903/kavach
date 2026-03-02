@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _ML_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=8)
 
 class EnsembleRiskScorer:
-    """The master bank-grade risk engine.
+    """The master risk engine.
     
     Combines:
     1. Rule-based signals (from standard detectors)
@@ -113,7 +113,7 @@ class EnsembleRiskScorer:
         rule_signals: dict[str, float], 
         identity: Identity
     ) -> dict[str, Any]:
-        """Run the full bank-grade ensemble scoring pipeline.
+        """Run the full ensemble scoring pipeline.
         
         Args:
             prompt: The raw user prompt.

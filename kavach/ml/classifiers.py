@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 class MLEnsembleClassifier:
-    """Bank-grade classifier ensemble using extracted text features.
+    """Production classifier ensemble using extracted text features.
 
     Combines:
     1. GradientBoostingClassifier (strong nonlinear signal, like XGBoost)

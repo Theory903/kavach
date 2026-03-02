@@ -1,4 +1,4 @@
-"""Kavach ML module — bank-grade ensemble risk engine.
+"""Kavach ML module — production-grade ensemble risk engine.
 
 Provides feature engineering, ML classifiers, embedding similarity,
 behavioral scoring, and meta-model aggregation for production-grade

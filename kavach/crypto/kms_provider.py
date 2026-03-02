@@ -1,6 +1,6 @@
-"""KMS Provider interfaces for RBI compliance.
+"""KMS Provider interfaces for enterprise compliance.
 
-Financial regulations require that log keys and API tokens are never
+Regulated environments require that log keys and API tokens are never
 stored in plaintext. They must be managed by an external Key Management Service.
 """
 
