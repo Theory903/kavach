@@ -15,10 +15,12 @@ from typing import Any
 from kavach.core.identity import Identity
 from kavach.core.policy_engine import Decision, PolicyEngine
 from kavach.core.risk_scorer import DetectorSignals, RiskScorer
+from kavach.detectors.apt_detector import APTDetector
 from kavach.detectors.exfiltration import ExfiltrationDetector
 from kavach.detectors.injection import InjectionDetector
 from kavach.detectors.intent_splitter import IntentSplitter
 from kavach.detectors.jailbreak import JailbreakDetector
+from kavach.guards.dos_guard import DoSGuard
 from kavach.ml.ensemble import EnsembleRiskScorer
 from kavach.policies.validator import Action, Policy
 
@@ -57,6 +59,8 @@ class InputGuard:
         self._jailbreak = JailbreakDetector()
         self._exfiltration = ExfiltrationDetector()
         self._intent = IntentSplitter()
+        self._apt = APTDetector()
+        self._dos = DoSGuard()
 
     def scan(
         self,
@@ -76,10 +80,18 @@ class InputGuard:
         """
         start = time.monotonic()
 
+        # 1. First line of defense: DoS/Resource check (fast fail)
+        dos_issue = self._dos.check_prompt(text)
+        if dos_issue:
+            latency = (time.monotonic() - start) * 1000
+            dec = Decision(action=Action.BLOCK, risk_score=1.0, reasons=[dos_issue["reason"]])
+            return GuardResult(decision=dec, signals=DetectorSignals(), latency_ms=latency)
+
         # Run all detectors
         injection = self._injection.scan(text)
         jailbreak = self._jailbreak.scan(text)
         exfiltration = self._exfiltration.scan(text)
+        apt = self._apt.scan(text)
         intent = self._intent.classify(text)
 
         # Build signals
@@ -87,11 +99,13 @@ class InputGuard:
             injection.matched_patterns
             + jailbreak.matched_patterns
             + exfiltration.matched_patterns
+            + apt.matched_vectors
         )
         signals = DetectorSignals(
             injection_score=injection.score,
             jailbreak_score=jailbreak.score,
             exfiltration_score=exfiltration.score,
+            apt_score=apt.score,
             matched_patterns=all_patterns,
             intent=intent.intent,
         )
@@ -100,6 +114,7 @@ class InputGuard:
             "injection_score": injection.score,
             "jailbreak_score": jailbreak.score,
             "exfiltration_score": exfiltration.score,
+            "apt_score": apt.score,
         }
 
         # Compute composite risk score
@@ -119,6 +134,7 @@ class InputGuard:
             "injection_score": injection.score,
             "jailbreak_score": jailbreak.score,
             "exfiltration_score": exfiltration.score,
+            "apt_score": apt.score,
             "intent": intent.intent,
         }
 

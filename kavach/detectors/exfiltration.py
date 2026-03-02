@@ -92,13 +92,21 @@ class ExfiltrationDetector:
             re.IGNORECASE,
         ), 0.85),
 
-        # --- Bulk Data Request ---
         ("bulk_data_request", re.compile(
             r"(?:(?:give|send|show|list|export|dump)\s+(?:me\s+)?(?:all\s+)?(?:user|customer|employee|client|patient|student)\s+"
             r"(?:data|records?|information|details?|profiles?|accounts?)|"
             r"(?:download|extract|export)\s+(?:all|the\s+entire|complete)\s+(?:dataset|database|records?|logs?))",
             re.IGNORECASE,
         ), 0.75),
+
+        # --- High-Risk Indian Financial Data ---
+        ("financial_data_india", re.compile(
+            r"(?:aadhaar(?:\s+card)?|pan(?:\s+card)?|upi(?:\s+id)?|ifsc(?:\s+code)?)\b|"
+            r"\b[A-Z]{5}[0-9]{4}[A-Z]{1}\b|"     # PAN format
+            r"\b\d{4}\s\d{4}\s\d{4}\b|"          # Aadhaar format
+            r"\b[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}\b", # UPI format
+            re.IGNORECASE,
+        ), 0.95),
     ]
 
     def scan(self, text: str) -> ExfiltrationResult:

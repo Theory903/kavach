@@ -63,6 +63,18 @@ class PIIGuard:
         ("dob", re.compile(
             r"\b(?:0[1-9]|1[0-2])[/\-](?:0[1-9]|[12]\d|3[01])[/\-](?:19|20)\d{2}\b"
         ), "[DOB_REDACTED]"),
+
+        ("aadhaar", re.compile(
+            r"\b\d{4}\s\d{4}\s\d{4}\b"
+        ), "[AADHAAR_REDACTED]"),
+
+        ("pan_card", re.compile(
+            r"\b[A-Z]{5}[0-9]{4}[A-Z]{1}\b"
+        ), "[PAN_REDACTED]"),
+
+        ("upi_id", re.compile(
+            r"\b[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}\b"
+        ), "[UPI_REDACTED]"),
     ]
 
     def scan(self, text: str) -> PIIResult:

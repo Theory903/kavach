@@ -7,12 +7,14 @@ raw, hashed, and redacted prompt logging modes.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import sys
 from datetime import datetime, timezone
 from typing import Any
 
+from kavach.crypto.kms_provider import EnvKMSProvider, KMSProvider
 from kavach.policies.validator import PromptLogMode
 
 
@@ -42,9 +44,25 @@ class KavachLogger:
         self,
         log_prompts: PromptLogMode = PromptLogMode.HASHED,
         logger_name: str = "kavach",
+        kms_provider: KMSProvider | None = None,
     ) -> None:
         self._log_prompt_mode = log_prompts
         self._logger = _setup_logger(logger_name)
+        self._kms = kms_provider or EnvKMSProvider()
+        # Seed for hash chain. In production this would be loaded from secure storage.
+        self._prev_hash = "0" * 64
+
+    def _compute_hmac(self, log_dict: dict[str, Any]) -> str:
+        """Compute HMAC-SHA256 of the log entry linked to the previous log."""
+        secret = self._kms.get_hmac_secret()
+        
+        # Serialize deterministically for hashing
+        canonical_json = json.dumps(log_dict, sort_keys=True)
+        payload = f"{self._prev_hash}|{canonical_json}".encode("utf-8")
+        
+        current_hash = hmac.new(secret, payload, hashlib.sha256).hexdigest()
+        self._prev_hash = current_hash
+        return current_hash
 
     def _prepare_prompt(self, prompt: str | None) -> str | None:
         """Prepare prompt for logging based on configured mode."""
@@ -93,6 +111,7 @@ class KavachLogger:
         if extra:
             entry["extra"] = extra
 
+        entry["_chain_hash"] = self._compute_hmac(entry)
         self._logger.info(json.dumps(entry, default=str))
 
     def log_tool_call(
@@ -113,6 +132,8 @@ class KavachLogger:
             "risk_score": risk_score,
             "reasons": reasons or [],
         }
+        
+        entry["_chain_hash"] = self._compute_hmac(entry)
         self._logger.info(json.dumps(entry, default=str))
 
     def log_error(self, error: str, context: dict[str, Any] | None = None) -> None:
@@ -123,4 +144,6 @@ class KavachLogger:
             "error": error,
             "context": context or {},
         }
+        
+        entry["_chain_hash"] = self._compute_hmac(entry)
         self._logger.error(json.dumps(entry, default=str))

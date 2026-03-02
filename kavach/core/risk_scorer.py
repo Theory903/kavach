@@ -21,6 +21,7 @@ class DetectorSignals:
     injection_score: float = 0.0
     jailbreak_score: float = 0.0
     exfiltration_score: float = 0.0
+    apt_score: float = 0.0
     pii_score: float = 0.0
     secret_score: float = 0.0
     matched_patterns: list[str] = field(default_factory=list)
@@ -32,6 +33,7 @@ class DetectorSignals:
             "injection_score": round(self.injection_score, 4),
             "jailbreak_score": round(self.jailbreak_score, 4),
             "exfiltration_score": round(self.exfiltration_score, 4),
+            "apt_score": round(self.apt_score, 4),
             "pii_score": round(self.pii_score, 4),
             "secret_score": round(self.secret_score, 4),
             "matched_patterns": self.matched_patterns,
@@ -41,11 +43,12 @@ class DetectorSignals:
 
 # Default weights for score aggregation — tuned for security-first stance
 DEFAULT_WEIGHTS: dict[str, float] = {
-    "injection": 0.35,
-    "jailbreak": 0.25,
-    "exfiltration": 0.20,
-    "pii": 0.10,
-    "secret": 0.10,
+    "injection": 0.30,
+    "apt": 0.25,
+    "jailbreak": 0.20,
+    "exfiltration": 0.15,
+    "pii": 0.05,
+    "secret": 0.05,
 }
 
 
@@ -85,6 +88,7 @@ class RiskScorer:
         """
         components = {
             "injection": signals.injection_score,
+            "apt": signals.apt_score,
             "jailbreak": signals.jailbreak_score,
             "exfiltration": signals.exfiltration_score,
             "pii": signals.pii_score,
@@ -107,6 +111,7 @@ class RiskScorer:
         """
         components = {
             "injection": signals.injection_score,
+            "apt": signals.apt_score,
             "jailbreak": signals.jailbreak_score,
             "exfiltration": signals.exfiltration_score,
             "pii": signals.pii_score,
