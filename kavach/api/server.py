@@ -39,6 +39,18 @@ class SanitizeRequest(BaseModel):
     prompt: str = Field(..., max_length=32000, description="The prompt to sanitize")
 
 
+class FeedbackRequest(BaseModel):
+    """Request body for production feedback loop."""
+
+    trace_id: str = Field(..., description="The original execution trace ID")
+    prompt: str = Field(..., max_length=32000)
+    decision: str = Field(..., description="Action that was taken (allow/sanitize/block)")
+    actual_label: str = Field(..., description="Ground truth category (benign, injection, etc.)")
+    was_correct: bool = Field(..., description="Was the system's decision correct?")
+    reviewer: str = Field(default="system")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class DecisionResponse(BaseModel):
     """Standard response for all analysis endpoints."""
 
@@ -133,6 +145,33 @@ def create_app(policy: str | None = None) -> FastAPI:
             "role": role,
             "policy": role_policy.model_dump(),
         }
+
+    @app.post("/v1/feedback")
+    @limiter.limit("200/minute")
+    async def ingest_feedback(request: Request, payload: FeedbackRequest) -> dict:
+        """Ingest production feedback to update the RL advisor and training dataset."""
+        from kavach.ml.feedback import FeedbackStore
+        store = FeedbackStore()
+        store.record(
+            trace_id=payload.trace_id,
+            prompt=payload.prompt,
+            decision=payload.decision,
+            actual_label=payload.actual_label,
+            was_correct=payload.was_correct,
+            reviewer=payload.reviewer,
+            metadata=payload.metadata,
+        )
+        # Online continuous update of RL advisor if applicable
+        # (This is just a light pass; full retraining is done offline via CLI)
+        if hasattr(gateway, "_rl_advisor"):
+            reward = gateway._rl_advisor.compute_reward(
+                action_taken=payload.decision,
+                actual_is_attack=(payload.actual_label != "benign"),
+                was_blocked=(payload.decision in ["block", "sanitize"])
+            )
+            # Find terminal state to update (in full prod, state_index stored in trace metadata)
+            # For this MVP, we only record it to the jsonl datastore
+        return {"status": "ok", "message": "Feedback recorded."}
 
     @app.get("/v1/metrics")
     async def get_metrics() -> dict:

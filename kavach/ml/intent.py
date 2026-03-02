@@ -212,3 +212,47 @@ class IntentClassifier:
         except Exception as e:
             logger.error("SLM multi-label classification failed: %s", e)
             return {"active_categories": [], "max_risk_score": 0.0, "slm_active": False}
+
+    def classify_with_context(
+        self,
+        prompt: str,
+        role: str,
+        tool_requested: str | None = None,
+    ) -> dict[str, Any]:
+        """Classify semantic intent, adjusting severity based on policy context.
+        
+        A request with an 'exfiltration' intent might be highly suspicious
+        for a 'guest' user, but normal for an 'admin' using an 'export_data' tool.
+        """
+        base_result = self.classify(prompt)
+        
+        if not base_result.get("slm_active"):
+            base_result["context_adjusted_risk"] = 0.0
+            return base_result
+
+        category = base_result["predicted_category"]
+        confidence = base_result["confidence"]
+        base_severity = _CATEGORY_SEVERITY.get(category, 0.0)
+
+        # Context adjustments
+        multiplier = 1.0
+
+        if role in ("admin", "superadmin", "analyst"):
+            # Highly trusted roles get a leniency multiplier for certain actions
+            if category in ("exfiltration", "social_engineering"):
+                multiplier = 0.6  # 40% reduction in risk severity
+
+        if tool_requested:
+            # If the user specifically asked for an export tool, exfiltration intent is expected
+            if category == "exfiltration" and tool_requested in ("export_data", "download", "query_db"):
+                multiplier = 0.4
+            
+            # If a guest asks for a shell execution tool, any weird intent is hyper-critical
+            if role in ("guest", "anonymous", "default") and tool_requested in ("execute_code", "shell"):
+                multiplier = 1.5
+
+        adjusted_risk = min(base_severity * confidence * multiplier, 1.0)
+        
+        base_result["context_adjusted_risk"] = round(adjusted_risk, 4)
+        base_result["context_multiplier"] = multiplier
+        return base_result

@@ -19,6 +19,7 @@ from kavach.core.risk_scorer import RiskScorer
 from kavach.guards.input_guard import InputGuard
 from kavach.guards.output_guard import OutputGuard
 from kavach.guards.tool_guard import ToolGuard
+from kavach.ml.rl_advisor import RLDecisionAdvisor
 from kavach.observability.logger import KavachLogger
 from kavach.observability.metrics import KavachMetrics
 from kavach.observability.tracer import KavachTracer
@@ -64,6 +65,7 @@ class KavachGateway:
         )
         self._output_guard = OutputGuard(policy=self._engine.policy)
         self._tool_guard = ToolGuard(policy=self._engine.policy)
+        self._rl_advisor = RLDecisionAdvisor(persist_path="data/rl_q_table.npy")
         self._logger = KavachLogger(
             log_prompts=self._engine.policy.observability.log_prompts,
         )
@@ -121,10 +123,31 @@ class KavachGateway:
         decision.session_id = identity.session_id
         decision.trace_id = self._tracer.generate_trace_id()
 
+        # ML intent parsing for RL
+        intent_cat = "unknown"
+        if guard_result.metadata.get("ml_details") and guard_result.metadata["ml_details"].get("intent_analysis"):
+            intent_cat = guard_result.metadata["ml_details"]["intent_analysis"].get("predicted_category", "unknown")
+
+        rl_sugg = self._rl_advisor.suggest(
+            risk_score=decision.risk_score,
+            intent_category=intent_cat,
+            role=role,
+            behavioral_multiplier=1.0,  # Could fetch from tracker if desired
+        )
+
+        final_action = self._rl_advisor.apply_policy_override(
+            rl_suggestion=rl_sugg["action"],
+            policy_decision=decision.action.value,
+            risk_score=decision.risk_score,
+        )
+
+        decision.action = Action(final_action)
+
         if guard_result.clean_prompt:
             decision.clean_prompt = guard_result.clean_prompt
 
         result = decision.to_dict()
+        result["rl_suggestion"] = rl_sugg
 
         # Log & record metrics
         self._logger.log_decision(result, prompt=prompt, identity=identity.to_dict())
@@ -167,11 +190,30 @@ class KavachGateway:
 
             input_decision = guard_result.decision
 
+            # Apply RL Advisor to input
+            intent_cat = "unknown"
+            if guard_result.metadata.get("ml_details") and guard_result.metadata["ml_details"].get("intent_analysis"):
+                intent_cat = guard_result.metadata["ml_details"]["intent_analysis"].get("predicted_category", "unknown")
+
+            rl_sugg = self._rl_advisor.suggest(
+                risk_score=input_decision.risk_score,
+                intent_category=intent_cat,
+                role=role,
+                behavioral_multiplier=1.0,
+            )
+            final_input_action = self._rl_advisor.apply_policy_override(
+                rl_suggestion=rl_sugg["action"],
+                policy_decision=input_decision.action.value,
+                risk_score=input_decision.risk_score,
+            )
+            input_decision.action = Action(final_input_action)
+
             if input_decision.is_blocked:
                 input_decision.latency_ms = (time.monotonic() - start) * 1000
                 input_decision.session_id = identity.session_id
                 result = {
                     **input_decision.to_dict(),
+                    "rl_suggestion": rl_sugg,
                     "action_taken": "blocked_before_llm",
                     "response": None,
                 }

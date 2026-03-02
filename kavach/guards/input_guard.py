@@ -34,6 +34,7 @@ class GuardResult:
     signals: DetectorSignals
     clean_prompt: str | None = None
     latency_ms: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class InputGuard:
@@ -121,10 +122,12 @@ class InputGuard:
         # Compute composite risk score
         dummy_identity = identity or Identity(user_id="anonymous", role="default")
         
+        metadata = {}
         if hasattr(self._scorer, "analyze"):
             # Use EnsembleRiskScorer
             ensemble_result = self._scorer.analyze(text, rule_signals, dummy_identity)
             risk_score = ensemble_result["final_score"]
+            metadata = ensemble_result
         else:
             # Fallback to legacy RiskScorer
             risk_score = self._scorer.compute(signals)
@@ -182,4 +185,5 @@ class InputGuard:
             signals=signals,
             clean_prompt=clean_prompt,
             latency_ms=latency,
+            metadata=metadata,
         )
