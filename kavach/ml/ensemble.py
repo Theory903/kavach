@@ -1,0 +1,154 @@
+"""Meta-model aggregation layer.
+
+Coordinates the rule engine, ML classifiers, embedding scorer,
+and behavioral tracker to produce one unified risk score and decision.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from kavach.core.identity import Identity
+from kavach.ml.behavioral import BehavioralTracker
+from kavach.ml.classifiers import MLEnsembleClassifier, _HAS_SKLEARN
+from kavach.ml.embeddings import EmbeddingRiskScorer, _HAS_SBERT
+from kavach.ml.features import extract_features
+
+
+logger = logging.getLogger(__name__)
+
+
+class EnsembleRiskScorer:
+    """The master bank-grade risk engine.
+    
+    Combines:
+    1. Rule-based signals (from standard detectors)
+    2. ML Classifier ensemble risk
+    3. Embedding similarity risk
+    4. Behavioral historical multiplier
+    """
+
+    def __init__(self, enable_ml: bool = True, enable_embeddings: bool = True) -> None:
+        """Initialize the ensemble.
+        
+        By default, attempts to initialize all ML components.
+        If dependencies are missing, it gracefully falls back to 
+        rule-based scoring.
+        """
+        self._behavioral = BehavioralTracker()
+        
+        self.ml_classifier: MLEnsembleClassifier | None = None
+        self.embedding_scorer: EmbeddingRiskScorer | None = None
+        
+        self.is_ml_active = False
+        
+        if enable_ml and _HAS_SKLEARN:
+            self.ml_classifier = MLEnsembleClassifier()
+            # Train sync on init (fast since dataset is small)
+            self.ml_classifier.train_on_bundled_dataset()
+            self.is_ml_active = True
+            
+        if enable_embeddings and _HAS_SBERT:
+            self.embedding_scorer = EmbeddingRiskScorer()
+            self.embedding_scorer.load_and_encode_corpus()
+            self.is_ml_active = True
+
+    def _blend_scores(
+        self, 
+        rule_score: float, 
+        ml_score: float, 
+        emb_score: float, 
+        multiplier: float
+    ) -> float:
+        """Weights and aggregates the signals.
+        
+        Rule score is deterministic and gets highest weight if strong.
+        """
+        # If rules caught a severe 1.0 injection, don't let ML dilute it.
+        if rule_score > 0.8:
+            base_score = max(rule_score, ml_score)
+        else:
+            # Weighted average
+            total_weight = 0.0
+            sum_weighted = 0.0
+            
+            # Rule weight: 0.4
+            sum_weighted += rule_score * 0.4
+            total_weight += 0.4
+            
+            # ML weight: 0.35 (if active)
+            if self.ml_classifier is not None and self.ml_classifier.is_trained:
+                sum_weighted += ml_score * 0.35
+                total_weight += 0.35
+                
+            # Embedding weight: 0.25 (if active)
+            if self.embedding_scorer is not None and self.embedding_scorer.is_loaded:
+                sum_weighted += emb_score * 0.25
+                total_weight += 0.25
+                
+            base_score = sum_weighted / total_weight if total_weight > 0 else rule_score
+            
+        # Apply behavioral multiplier
+        final = base_score * multiplier
+        
+        return min(max(final, 0.0), 1.0)
+
+    def analyze(
+        self, 
+        prompt: str, 
+        rule_signals: dict[str, float], 
+        identity: Identity
+    ) -> dict[str, Any]:
+        """Run the full bank-grade ensemble scoring pipeline.
+        
+        Args:
+            prompt: The raw user prompt.
+            rule_signals: Dictionary of rule-based scores (e.g. {"injection": 0.9})
+            identity: The user identity to apply behavioral history.
+            
+        Returns:
+            Dict containing final_score and a breakdown of components.
+        """
+        # 1. Base rule score (max of all rule detectors)
+        rule_score = max(rule_signals.values()) if rule_signals else 0.0
+        
+        ml_score = 0.0
+        emb_score = 0.0
+        ml_breakdown = {}
+        
+        # 2. Extract features and run ML Classifiers
+        if self.ml_classifier is not None and self.ml_classifier.is_trained:
+            features = extract_features(prompt)
+            ml_breakdown = self.ml_classifier.predict_risk(features)
+            ml_score = ml_breakdown.get("ensemble_risk", 0.0)
+            
+        # 3. Run Embedding Similarity
+        if self.embedding_scorer is not None and self.embedding_scorer.is_loaded:
+            emb_score = self.embedding_scorer.predict_risk(prompt)
+            
+        # 4. Get behavioral adjustment
+        multiplier = self._behavioral.get_behavioral_multiplier(identity.user_id)
+        
+        # 5. Aggregate
+        final_score = self._blend_scores(rule_score, ml_score, emb_score, multiplier)
+        
+        breakdown = {
+            "final_score": float(final_score),
+            "components": {
+                "rule_score": float(rule_score),
+                "ml_classifier_score": float(ml_score),
+                "embedding_sim_score": float(emb_score),
+                "behavioral_multiplier": float(multiplier),
+            },
+            "rule_signals": rule_signals
+        }
+        
+        if ml_breakdown:
+            breakdown["components"]["ml_details"] = ml_breakdown
+            
+        return breakdown
+
+    def update_behavior(self, user_id: str, risk_score: float, action: str) -> None:
+        """Update behavioral tracker after action is taken."""
+        self._behavioral.record_interaction(user_id, risk_score, action)

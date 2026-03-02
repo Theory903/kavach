@@ -31,6 +31,7 @@ class Decision:
     risk_score: float = 0.0
     reasons: list[str] = field(default_factory=list)
     matched_rules: list[str] = field(default_factory=list)
+    ml_components: dict[str, Any] = field(default_factory=dict)
     clean_prompt: str | None = None
     latency_ms: float = 0.0
     session_id: str = ""
@@ -46,7 +47,7 @@ class Decision:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for API responses and logging."""
-        return {
+        d = {
             "decision": self.action.value,
             "risk_score": round(self.risk_score, 4),
             "reasons": self.reasons,
@@ -56,6 +57,9 @@ class Decision:
             "session_id": self.session_id,
             "trace_id": self.trace_id,
         }
+        if self.ml_components:
+            d["ml_components"] = self.ml_components
+        return d
 
 
 # ------------------------------------------------------------------

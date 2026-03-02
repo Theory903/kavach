@@ -19,6 +19,7 @@ from kavach.detectors.exfiltration import ExfiltrationDetector
 from kavach.detectors.injection import InjectionDetector
 from kavach.detectors.intent_splitter import IntentSplitter
 from kavach.detectors.jailbreak import JailbreakDetector
+from kavach.ml.ensemble import EnsembleRiskScorer
 from kavach.policies.validator import Action, Policy
 
 
@@ -48,10 +49,10 @@ class InputGuard:
     def __init__(
         self,
         policy: str | Path | dict[str, Any] | Policy | None = None,
-        risk_scorer: RiskScorer | None = None,
+        risk_scorer: RiskScorer | EnsembleRiskScorer | None = None,
     ) -> None:
         self._engine = PolicyEngine(policy)
-        self._scorer = risk_scorer or RiskScorer()
+        self._scorer = risk_scorer or EnsembleRiskScorer()
         self._injection = InjectionDetector()
         self._jailbreak = JailbreakDetector()
         self._exfiltration = ExfiltrationDetector()
@@ -95,8 +96,22 @@ class InputGuard:
             intent=intent.intent,
         )
 
+        rule_signals = {
+            "injection_score": injection.score,
+            "jailbreak_score": jailbreak.score,
+            "exfiltration_score": exfiltration.score,
+        }
+
         # Compute composite risk score
-        risk_score = self._scorer.compute(signals)
+        dummy_identity = identity or Identity(user_id="anonymous", role="default")
+        
+        if hasattr(self._scorer, "analyze"):
+            # Use EnsembleRiskScorer
+            ensemble_result = self._scorer.analyze(text, rule_signals, dummy_identity)
+            risk_score = ensemble_result["final_score"]
+        else:
+            # Fallback to legacy RiskScorer
+            risk_score = self._scorer.compute(signals)
 
         # Build evaluation context
         context: dict[str, Any] = {
@@ -107,9 +122,8 @@ class InputGuard:
             "intent": intent.intent,
         }
 
-        if identity:
-            context["role"] = identity.role
-            context["user_id"] = identity.user_id
+        context["role"] = dummy_identity.role
+        context["user_id"] = dummy_identity.user_id
 
         if additional_context:
             context.update(additional_context)
@@ -117,6 +131,10 @@ class InputGuard:
         # Evaluate policy rules
         decision = self._engine.evaluate(**context)
         decision.risk_score = risk_score
+        
+        # Add ML breakdown if available
+        if hasattr(self._scorer, "analyze"):
+            decision.ml_components = ensemble_result.get("components", {})
 
         if identity:
             decision.session_id = identity.session_id
@@ -127,6 +145,10 @@ class InputGuard:
             from kavach.sanitizers.prompt_cleaner import PromptCleaner
             cleaner = PromptCleaner()
             clean_prompt = cleaner.clean(text)
+            
+        # Update behavioral tracker if ensemble is used
+        if hasattr(self._scorer, "update_behavior"):
+            self._scorer.update_behavior(dummy_identity.user_id, risk_score, decision.action.value)
 
         latency = (time.monotonic() - start) * 1000
 
