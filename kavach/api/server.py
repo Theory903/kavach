@@ -138,6 +138,15 @@ def create_app(policy: str | None = None) -> FastAPI:
             "decisions_by_action": snapshot.decisions_by_action,
         }
 
+    @app.get("/metrics")
+    async def prometheus_metrics() -> Any:
+        """Standard Prometheus metrics scraping endpoint."""
+        from fastapi import Response
+        import kavach.observability.prometheus as prom
+        
+        data, content_type = prom.get_metrics_response()
+        return Response(content=data, media_type=content_type)
+
     @app.get("/health")
     async def health() -> dict:
         """Health check endpoint."""

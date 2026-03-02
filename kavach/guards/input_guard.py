@@ -23,6 +23,7 @@ from kavach.detectors.jailbreak import JailbreakDetector
 from kavach.guards.dos_guard import DoSGuard
 from kavach.ml.ensemble import EnsembleRiskScorer
 from kavach.policies.validator import Action, Policy
+import kavach.observability.prometheus as prom
 
 
 @dataclass
@@ -148,6 +149,9 @@ class InputGuard:
         decision = self._engine.evaluate(**context)
         decision.risk_score = risk_score
         
+        # Record Prometheus stats
+        prom.observe_decision(decision)
+        
         # Add ML breakdown if available
         if hasattr(self._scorer, "analyze"):
             decision.ml_components = ensemble_result.get("components", {})
@@ -166,7 +170,12 @@ class InputGuard:
         if hasattr(self._scorer, "update_behavior"):
             self._scorer.update_behavior(dummy_identity.user_id, risk_score, decision.action.value)
 
-        latency = (time.monotonic() - start) * 1000
+        # We calculate the latency using Prometheus inside this function manually to avoid early return skips
+        duration = time.perf_counter() - start
+        if prom._HAS_PROMETHEUS:
+            prom.KAVACH_EVALUATION_LATENCY.observe(duration)
+            
+        latency = duration * 1000
 
         return GuardResult(
             decision=decision,

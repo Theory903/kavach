@@ -6,7 +6,7 @@ import pytest
 from kavach.core.identity import Identity
 from kavach.ml.behavioral import BehavioralTracker
 from kavach.ml.classifiers import MLEnsembleClassifier, _HAS_SKLEARN
-from kavach.ml.embeddings import EmbeddingRiskScorer, _HAS_SBERT
+from kavach.ml.embeddings import EmbeddingRiskScorer, _HAS_ONNX
 from kavach.ml.ensemble import EnsembleRiskScorer
 from kavach.ml.features import extract_features, FEATURE_NAMES
 
@@ -63,12 +63,12 @@ class TestClassifiers:
         assert risk_benign["gbm_risk"] < 0.4
 
 
-@pytest.mark.skipif(not _HAS_SBERT, reason="sentence-transformers not installed")
+@pytest.mark.skipif(not _HAS_ONNX, reason="onnxruntime not installed")
 class TestEmbeddings:
     """Tests for the embedding similarity scorer."""
 
     def test_embedding_scorer(self) -> None:
-        scorer = EmbeddingRiskScorer(model_name="all-MiniLM-L6-v2")
+        scorer = EmbeddingRiskScorer(model_id="Xenova/all-MiniLM-L6-v2")
         scorer.load_and_encode_corpus()
         assert scorer.is_loaded
 
@@ -119,7 +119,7 @@ class TestEnsembleRiskScorer:
     @pytest.fixture
     def ensemble(self) -> EnsembleRiskScorer:
         # Enable ML and embeddings if packages are available
-        return EnsembleRiskScorer(enable_ml=_HAS_SKLEARN, enable_embeddings=_HAS_SBERT)
+        return EnsembleRiskScorer(enable_ml=_HAS_SKLEARN, enable_embeddings=_HAS_ONNX)
 
     def test_analyze_benign(self, ensemble: EnsembleRiskScorer) -> None:
         prompt = "How do I reverse a string in python?"

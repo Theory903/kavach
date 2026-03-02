@@ -12,8 +12,10 @@ from typing import Any
 from kavach.core.identity import Identity
 from kavach.ml.behavioral import BehavioralTracker
 from kavach.ml.classifiers import MLEnsembleClassifier, _HAS_SKLEARN
-from kavach.ml.embeddings import EmbeddingRiskScorer, _HAS_SBERT
+from kavach.ml.embeddings import EmbeddingRiskScorer, _HAS_ONNX
 from kavach.ml.features import extract_features
+from kavach.ml.redis_behavioral import RedisBehavioralTracker, _HAS_REDIS
+import kavach.observability.prometheus as prom
 
 
 logger = logging.getLogger(__name__)
@@ -29,14 +31,20 @@ class EnsembleRiskScorer:
     4. Behavioral historical multiplier
     """
 
-    def __init__(self, enable_ml: bool = True, enable_embeddings: bool = True) -> None:
-        """Initialize the ensemble.
-        
-        By default, attempts to initialize all ML components.
-        If dependencies are missing, it gracefully falls back to 
-        rule-based scoring.
-        """
-        self._behavioral = BehavioralTracker()
+    def __init__(
+        self, 
+        enable_ml: bool = True, 
+        enable_embeddings: bool = True,
+        use_redis: bool = False,
+        redis_url: str = "redis://localhost:6379/0"
+    ) -> None:
+        """Initialize the ensemble."""
+        if use_redis and _HAS_REDIS:
+            self._behavioral = RedisBehavioralTracker(redis_url=redis_url)
+        else:
+            if use_redis:
+                logger.warning("Redis requested but redis-py not installed. Falling back to in-memory tracker.")
+            self._behavioral = BehavioralTracker()
         
         self.ml_classifier: MLEnsembleClassifier | None = None
         self.embedding_scorer: EmbeddingRiskScorer | None = None
@@ -49,7 +57,7 @@ class EnsembleRiskScorer:
             self.ml_classifier.train_on_bundled_dataset()
             self.is_ml_active = True
             
-        if enable_embeddings and _HAS_SBERT:
+        if enable_embeddings and _HAS_ONNX:
             self.embedding_scorer = EmbeddingRiskScorer()
             self.embedding_scorer.load_and_encode_corpus()
             self.is_ml_active = True
@@ -117,15 +125,17 @@ class EnsembleRiskScorer:
         emb_score = 0.0
         ml_breakdown = {}
         
-        # 2. Extract features and run ML Classifiers
-        if self.ml_classifier is not None and self.ml_classifier.is_trained:
-            features = extract_features(prompt)
-            ml_breakdown = self.ml_classifier.predict_risk(features)
-            ml_score = ml_breakdown.get("ensemble_risk", 0.0)
-            
-        # 3. Run Embedding Similarity
-        if self.embedding_scorer is not None and self.embedding_scorer.is_loaded:
-            emb_score = self.embedding_scorer.predict_risk(prompt)
+        # Time the ML features and ONNX embedding components
+        with prom.latency_timer(prom.KAVACH_ML_INFERENCE_TIME):
+            # 2. Extract features and run ML Classifiers
+            if self.ml_classifier is not None and self.ml_classifier.is_trained:
+                features = extract_features(prompt)
+                ml_breakdown = self.ml_classifier.predict_risk(features)
+                ml_score = ml_breakdown.get("ensemble_risk", 0.0)
+                
+            # 3. Run Embedding Similarity
+            if self.embedding_scorer is not None and self.embedding_scorer.is_loaded:
+                emb_score = self.embedding_scorer.predict_risk(prompt)
             
         # 4. Get behavioral adjustment
         multiplier = self._behavioral.get_behavioral_multiplier(identity.user_id)
