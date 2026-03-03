@@ -1,12 +1,12 @@
 {
   "version": "v1.0",
-  "n_total": 38070,
-  "n_train": 32359,
-  "n_test": 5711,
+  "n_total": 679538,
+  "n_train": 577607,
+  "n_test": 101931,
   "n_features": 30,
-  "attack_ratio": 0.38229577094825323,
-  "gbm_test_accuracy": 0.8481877079320609,
-  "gbm_test_precision": 0.8316532258064516,
-  "gbm_test_recall": 0.7558405863490609,
-  "gbm_test_f1": 0.7919366450683946
+  "attack_ratio": 0.3610040939579538,
+  "gbm_test_accuracy": 0.8552942676908889,
+  "gbm_test_precision": 0.8458401305057096,
+  "gbm_test_recall": 0.7327028642861025,
+  "gbm_test_f1": 0.7852171127355331
 }

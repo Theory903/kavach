@@ -38,3 +38,6 @@ htmlcov/
 
 # Logs
 *.log
+data/datasets/all_datasets.json
+data/trained_models/raw_dataset.json
+*.parquet

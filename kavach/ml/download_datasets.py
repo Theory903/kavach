@@ -76,26 +76,27 @@ def _download_csv(url: str, name: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def download_trustairlab_jailbreaks() -> list[tuple[str, str, str]]:
-    """TrustAIRLab/in-the-wild-jailbreak-prompts — 1,405 jailbreaks + regular prompts."""
+    """TrustAIRLab/in-the-wild-jailbreak-prompts — ALL jailbreaks + regular prompts."""
     pairs: list[tuple[str, str, str]] = []
 
     for config in ["jailbreak_2023_12_25", "regular_2023_12_25"]:
         is_jailbreak = "jailbreak" in config
         label = "jailbreak" if is_jailbreak else "benign"
-        url = _hf_parquet_url("TrustAIRLab/in-the-wild-jailbreak-prompts", config)
-        df = _download_parquet(url, f"TrustAIRLab/{config}")
-        if df.empty:
-            continue
 
-        col = "prompt" if "prompt" in df.columns else df.columns[0]
-        for _, row in df.iterrows():
-            text = str(row.get(col, "")).strip()
-            if 10 < len(text) < 5000:
-                pairs.append((text[:2000], label, "trustairlab"))
-                if len(pairs) >= 3000:
-                    break
+        # Download all available shards
+        for shard in range(20):  # try up to 20 shards
+            url = _hf_parquet_url("TrustAIRLab/in-the-wild-jailbreak-prompts", config, shard=shard)
+            df = _download_parquet(url, f"TrustAIRLab/{config}/shard-{shard}")
+            if df.empty:
+                break  # no more shards
 
-    log.info("  TrustAIRLab: %d samples", len(pairs))
+            col = "prompt" if "prompt" in df.columns else df.columns[0]
+            for _, row in df.iterrows():
+                text = str(row.get(col, "")).strip()
+                if 10 < len(text) < 5000:
+                    pairs.append((text[:2000], label, "trustairlab"))
+
+    log.info("  TrustAIRLab: %d samples (NO CAP)", len(pairs))
     return pairs
 
 
@@ -183,29 +184,28 @@ def download_slabs() -> list[tuple[str, str, str]]:
     return pairs
 
 
-def download_j1n2_mix(max_samples: int = 20000) -> list[tuple[str, str, str]]:
-    """J1N2/mix-prompt-injection-dataset — 1.15M (capped for sanity)."""
+def download_j1n2_mix() -> list[tuple[str, str, str]]:
+    """J1N2/mix-prompt-injection-dataset — ALL 1.15M rows (no cap)."""
     pairs: list[tuple[str, str, str]] = []
 
-    # This is a huge dataset, try first parquet shard only
-    url = _hf_parquet_url("J1N2/mix-prompt-injection-dataset")
-    df = _download_parquet(url, "J1N2/mix (shard 0)")
-    if df.empty:
-        return pairs
+    # Download ALL available parquet shards
+    for shard in range(50):  # try up to 50 shards for this massive dataset
+        url = _hf_parquet_url("J1N2/mix-prompt-injection-dataset", shard=shard)
+        df = _download_parquet(url, f"J1N2/mix (shard {shard})")
+        if df.empty:
+            break  # no more shards
 
-    count = 0
-    for _, row in df.iterrows():
-        text = str(row.get("prompt", "")).strip()
-        label = row.get("label", False)
-        source = str(row.get("source", "j1n2"))
-        if len(text) > 5:
-            is_attack = label is True or label == 1 or str(label).lower() == "true"
-            pairs.append((text[:2000], "injection" if is_attack else "benign", f"j1n2/{source}"))
-            count += 1
-            if count >= max_samples:
-                break
+        for _, row in df.iterrows():
+            text = str(row.get("prompt", "")).strip()
+            label = row.get("label", False)
+            source = str(row.get("source", "j1n2"))
+            if len(text) > 5:
+                is_attack = label is True or label == 1 or str(label).lower() == "true"
+                pairs.append((text[:2000], "injection" if is_attack else "benign", f"j1n2/{source}"))
 
-    log.info("  J1N2: %d samples (capped at %d)", len(pairs), max_samples)
+        log.info("    Shard %d: %d cumulative samples", shard, len(pairs))
+
+    log.info("  J1N2: %d samples (NO CAP — all shards)", len(pairs))
     return pairs
 
 
@@ -233,39 +233,44 @@ def download_anthropic_rlhf() -> list[tuple[str, str, str]]:
         return "benign"
 
     pairs: list[tuple[str, str, str]] = []
-    url = "https://huggingface.co/datasets/Anthropic/hh-rlhf/resolve/main/harmless-base/train.jsonl.gz"
-    log.info("  Downloading Anthropic/hh-rlhf harmless-base...")
-    try:
-        r = requests.get(url, timeout=180)
-        r.raise_for_status()
-        data = gzip.decompress(r.content)
-        lines = data.decode("utf-8", errors="ignore").strip().split("\n")
-        log.info("  -> %d lines", len(lines))
 
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except Exception:
-                continue
+    # Download ALL splits: harmless-base, helpful-base, helpful-online, helpful-rejection-sampled
+    splits = [
+        "harmless-base/train.jsonl.gz",
+        "helpful-base/train.jsonl.gz",
+    ]
 
-            for key in ["rejected", "chosen"]:
-                conv = str(row.get(key, ""))
-                human_turns = re.findall(r"Human:\s*(.+?)(?=\s*(?:Assistant:|$))", conv, re.DOTALL)
-                for turn in human_turns:
-                    turn = turn.strip()
-                    if 15 < len(turn) < 500:
-                        cat = classify(turn)
-                        pairs.append((turn, cat, "anthropic_rlhf"))
+    for split_path in splits:
+        url = f"https://huggingface.co/datasets/Anthropic/hh-rlhf/resolve/main/{split_path}"
+        log.info("  Downloading Anthropic/hh-rlhf %s...", split_path)
+        try:
+            r = requests.get(url, timeout=300)
+            r.raise_for_status()
+            data = gzip.decompress(r.content)
+            lines = data.decode("utf-8", errors="ignore").strip().split("\n")
+            log.info("  -> %d lines from %s", len(lines), split_path)
 
-            if len(pairs) >= 10000:
-                break
+            for line in lines:  # NO CAP — process every line
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
 
-    except Exception as e:
-        log.warning("  FAILED Anthropic RLHF: %s", e)
+                for key in ["rejected", "chosen"]:
+                    conv = str(row.get(key, ""))
+                    human_turns = re.findall(r"Human:\s*(.+?)(?=\s*(?:Assistant:|$))", conv, re.DOTALL)
+                    for turn in human_turns:
+                        turn = turn.strip()
+                        if 15 < len(turn) < 500:
+                            cat = classify(turn)
+                            pairs.append((turn, cat, "anthropic_rlhf"))
 
-    log.info("  Anthropic RLHF: %d samples", len(pairs))
+        except Exception as e:
+            log.warning("  FAILED Anthropic RLHF %s: %s", split_path, e)
+
+    log.info("  Anthropic RLHF: %d samples (NO CAP — all splits)", len(pairs))
     return pairs
 
 
@@ -335,7 +340,7 @@ ALL_DOWNLOADERS = [
     ("Mindgard Evasions", download_mindgard_evasions),
     ("SafeGuard (xTRam1)", download_safeguard),
     ("S-Labs Injections", download_slabs),
-    ("J1N2 Mix (capped)", download_j1n2_mix),
+    ("J1N2 Mix (FULL)", download_j1n2_mix),
     ("Anthropic HH-RLHF", download_anthropic_rlhf),
     ("ChatGPT Jailbreaks", download_chatgpt_jailbreaks),
     ("AgentHarm (AISI)", download_agentharm),
