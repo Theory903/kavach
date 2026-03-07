@@ -24,6 +24,8 @@ from kavach.observability.logger import KavachLogger
 from kavach.observability.metrics import KavachMetrics
 from kavach.observability.tracer import KavachTracer
 from kavach.policies.validator import Action, Policy
+from kavach.router.model_router import ModelRouter
+from kavach.behavior.session_engine import SessionBehaviorEngine
 
 
 class KavachGateway:
@@ -51,12 +53,15 @@ class KavachGateway:
         self,
         policy: str | Path | dict[str, Any] | Policy | None = None,
         risk_scorer: RiskScorer | None = None,
+        router: ModelRouter | None = None,
     ) -> None:
         """Initialize the gateway with a policy.
 
         Args:
             policy: Policy source (file path, dict, Policy, or None for default).
             risk_scorer: Custom risk scorer, or None for default weights.
+            router: Optional ModelRouter. When provided, enables multi-LLM
+                dispatch in secure_call() without requiring llm_call.
         """
         self._engine = PolicyEngine(policy)
         self._input_guard = InputGuard(
@@ -65,12 +70,15 @@ class KavachGateway:
         )
         self._output_guard = OutputGuard(policy=self._engine.policy)
         self._tool_guard = ToolGuard(policy=self._engine.policy)
-        self._rl_advisor = RLDecisionAdvisor(persist_path="data/rl_q_table.npy")
+        self._rl_advisor = RLDecisionAdvisor(persist_path="data/rl_ppo")
         self._logger = KavachLogger(
             log_prompts=self._engine.policy.observability.log_prompts,
         )
         self._metrics = KavachMetrics()
         self._tracer = KavachTracer()
+        self._router = router
+        # Per-session behavior engines (created lazily)
+        self._behavior_engines: dict[str, SessionBehaviorEngine] = {}
 
     @property
     def input_guard(self) -> InputGuard:
@@ -87,6 +95,16 @@ class KavachGateway:
     @property
     def metrics(self) -> KavachMetrics:
         return self._metrics
+
+    @property
+    def router(self) -> ModelRouter | None:
+        return self._router
+
+    def _get_behavior_engine(self, session_id: str) -> SessionBehaviorEngine:
+        """Get or create the SessionBehaviorEngine for a session."""
+        if session_id not in self._behavior_engines:
+            self._behavior_engines[session_id] = SessionBehaviorEngine(session_id)
+        return self._behavior_engines[session_id]
 
     def analyze(
         self,
@@ -128,11 +146,15 @@ class KavachGateway:
         if guard_result.metadata.get("ml_details") and guard_result.metadata["ml_details"].get("intent_analysis"):
             intent_cat = guard_result.metadata["ml_details"]["intent_analysis"].get("predicted_category", "unknown")
 
+        # Session behavior engine — get multiplier for this turn
+        behavior_engine = self._get_behavior_engine(identity.session_id)
+        behavior_signal = behavior_engine.update(risk_score=decision.risk_score)
+
         rl_sugg = self._rl_advisor.suggest(
             risk_score=decision.risk_score,
             intent_category=intent_cat,
             role=role,
-            behavioral_multiplier=1.0,  # Could fetch from tracker if desired
+            behavioral_multiplier=behavior_signal.behavior_multiplier,
         )
 
         final_action = self._rl_advisor.apply_policy_override(
@@ -195,11 +217,15 @@ class KavachGateway:
             if guard_result.metadata.get("ml_details") and guard_result.metadata["ml_details"].get("intent_analysis"):
                 intent_cat = guard_result.metadata["ml_details"]["intent_analysis"].get("predicted_category", "unknown")
 
+            # Session behavior engine — get multiplier for this turn
+            behavior_engine = self._get_behavior_engine(identity.session_id)
+            behavior_signal = behavior_engine.update(risk_score=input_decision.risk_score)
+
             rl_sugg = self._rl_advisor.suggest(
                 risk_score=input_decision.risk_score,
                 intent_category=intent_cat,
                 role=role,
-                behavioral_multiplier=1.0,
+                behavioral_multiplier=behavior_signal.behavior_multiplier,
             )
             final_input_action = self._rl_advisor.apply_policy_override(
                 rl_suggestion=rl_sugg["action"],
@@ -224,11 +250,19 @@ class KavachGateway:
             # Step 2: Use clean prompt if sanitized
             effective_prompt = guard_result.clean_prompt or prompt
 
-            # Step 3: Call LLM (if provided)
+            # Step 3: Call LLM — via provided callback OR model router
             llm_response = None
             if llm_call is not None:
                 with self._tracer.span("kavach.llm_call"):
                     llm_response = llm_call(effective_prompt)
+            elif self._router is not None:
+                with self._tracer.span("kavach.router"):
+                    route_result = self._router.route_prompt(
+                        prompt=effective_prompt,
+                        risk_score=input_decision.risk_score,
+                    )
+                    if route_result.success:
+                        llm_response = route_result.response
 
             # Step 4: Output guard
             output_decision = Decision(action=Action.ALLOW)

@@ -54,13 +54,13 @@ rules:
     priority: 80
 
   - id: medium_risk_sanitize
-    condition: "risk_score >= 0.4 AND risk_score <= 0.7"
+    condition: "risk_score >= 0.35 AND risk_score <= 0.6"
     action: sanitize
     reason: "Medium risk — sanitizing prompt before execution"
     priority: 50
 
   - id: high_risk_escalate
-    condition: "risk_score > 0.7 AND role != 'admin'"
+    condition: "risk_score > 0.6 AND role != 'admin'"
     action: require_approval
     reason: "High risk — requires admin approval before execution"
     priority: 60

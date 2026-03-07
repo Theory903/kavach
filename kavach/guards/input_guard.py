@@ -63,6 +63,12 @@ class InputGuard:
         self._intent = IntentSplitter()
         self._apt = APTDetector()
         self._dos = DoSGuard()
+        self._vector_store = None
+        try:
+            from kavach.vectors.attack_store import AttackVectorStore
+            self._vector_store = AttackVectorStore()
+        except ImportError:
+            prom.get_logger().warning("AttackVectorStore dependencies missing. Vector checks disabled.")
 
     def scan(
         self,
@@ -103,11 +109,26 @@ class InputGuard:
             + exfiltration.matched_patterns
             + apt.matched_vectors
         )
+        # Vector search step
+        vector_score = 0.0
+        if self._vector_store:
+            # We don't have embeddings here yet, so we have to use text search.
+            try:
+                vector_matches = self._vector_store.search(text, k=3, threshold=0.85)
+                if vector_matches:
+                    vector_score = max(match.score for match in vector_matches)
+                    for match in vector_matches:
+                         all_patterns.append(f"vector_match_{match.category}")
+            except Exception as e:
+                # Log error but don't fail the pipeline
+                prom.get_logger().error(f"Vector search failed: {e}")
+
         signals = DetectorSignals(
             injection_score=injection.score,
             jailbreak_score=jailbreak.score,
             exfiltration_score=exfiltration.score,
             apt_score=apt.score,
+            vector_score=vector_score,
             matched_patterns=all_patterns,
             intent=intent.intent,
         )
@@ -117,6 +138,7 @@ class InputGuard:
             "jailbreak_score": jailbreak.score,
             "exfiltration_score": exfiltration.score,
             "apt_score": apt.score,
+            "vector_score": vector_score,
         }
 
         # Compute composite risk score
@@ -139,6 +161,7 @@ class InputGuard:
             "jailbreak_score": jailbreak.score,
             "exfiltration_score": exfiltration.score,
             "apt_score": apt.score,
+            "vector_score": vector_score,     # Added vector score
             "intent": intent.intent,
         }
 

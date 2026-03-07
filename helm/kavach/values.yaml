@@ -1,0 +1,66 @@
+# Default values for kavach Helm chart.
+# Override with: helm install kavach ./helm/kavach -f my-values.yaml
+
+replicaCount: 2
+
+image:
+  repository: kavach
+  pullPolicy: IfNotPresent
+  tag: "0.2.0"
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: kavach.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 250m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+env:
+  REDIS_URL: "redis://kavach-redis:6379"
+  KAVACH_LOG_LEVEL: "info"
+  # OPENAI_API_KEY: set via secret
+  # ANTHROPIC_API_KEY: set via secret
+
+# Secret refs for API keys
+secretEnv:
+  enabled: false
+  secretName: "kavach-api-keys"
+  keys:
+    - OPENAI_API_KEY
+    - ANTHROPIC_API_KEY
+
+redis:
+  enabled: true
+  image: redis:7-alpine
+  port: 6379
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 5Gi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

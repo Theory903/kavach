@@ -235,19 +235,31 @@ class PolicyEngine:
             risk_score=context.get("risk_score", 0.0),
         )
 
-        # Check role-based risk threshold
+        # Check Multi-Zone Decision logic based purely on risk_score
+        risk = context.get("risk_score", 0.0)
+        
+        if isinstance(risk, (int, float)):
+            if risk < 0.2:
+                pass  # ALLOW — confident benign
+            elif risk < 0.6:
+                decision.action = Action.SANITIZE
+                decision.reasons.append(f"Risk {risk:.2f} in sanitize zone (0.2–0.6)")
+            elif risk < 0.85:
+                decision.action = Action.MONITOR
+                decision.reasons.append(f"Risk {risk:.2f} in monitor zone (0.6–0.85)")
+            else:
+                decision.action = Action.BLOCK
+                decision.reasons.append(f"Risk {risk:.2f} in block zone (>= 0.85)")
+
+        # Role-based absolute overrides
         role = context.get("role", "")
-        role_blocked = False
         if role:
             role_policy = self.get_role_policy(role)
-            risk = context.get("risk_score", 0.0)
-
             if isinstance(risk, (int, float)) and risk > role_policy.max_risk_score:
                 decision.action = Action.BLOCK
                 decision.reasons.append(
                     f"risk_score {risk:.2f} exceeds max {role_policy.max_risk_score} for role '{role}'"
                 )
-                role_blocked = True
 
         # Evaluate rules in priority order (already sorted)
         for rule in self._policy.rules:
@@ -306,7 +318,8 @@ def _action_severity(action: Action) -> int:
     """Severity ranking for choosing the most restrictive action."""
     return {
         Action.ALLOW: 0,
-        Action.SANITIZE: 1,
-        Action.REQUIRE_APPROVAL: 2,
-        Action.BLOCK: 3,
+        Action.MONITOR: 1,
+        Action.SANITIZE: 2,
+        Action.REQUIRE_APPROVAL: 3,
+        Action.BLOCK: 4,
     }.get(action, 0)

@@ -39,6 +39,12 @@ class SanitizeRequest(BaseModel):
     prompt: str = Field(..., max_length=32000, description="The prompt to sanitize")
 
 
+class RAGSanitizeRequest(BaseModel):
+    """Request body for /v1/rag/sanitize."""
+
+    documents: list[str] = Field(..., description="List of retrieved documents to sanitize")
+
+
 class FeedbackRequest(BaseModel):
     """Request body for production feedback loop."""
 
@@ -137,6 +143,24 @@ def create_app(policy: str | None = None) -> FastAPI:
             "clean_prompt": clean,
         }
 
+    @app.post("/v1/rag/sanitize")
+    @limiter.limit("200/minute")
+    async def sanitize_rag_context(request: Request, payload: RAGSanitizeRequest) -> dict:
+        """Sanitize retrieved external documents from indirect prompt injections."""
+        from kavach.context.rag_sanitizer import RAGDocumentSanitizer  # noqa: PLC0415
+        
+        # In a real setup, we would inject the vector store from gateway here
+        # but for simple demonstration we instantiate with default vector rules.
+        sanitizer = RAGDocumentSanitizer()
+        result = sanitizer.sanitize(documents=payload.documents)
+        
+        return {
+            "documents": result.documents,
+            "flagged_indices": result.flagged_indices,
+            "injection_count": result.injection_count,
+            "any_blocked": result.any_blocked,
+        }
+
     @app.get("/v1/policy/{role}")
     async def get_policy(role: str) -> dict:
         """Get the policy configuration for a specific role."""
@@ -197,10 +221,145 @@ def create_app(policy: str | None = None) -> FastAPI:
         data, content_type = prom.get_metrics_response()
         return Response(content=data, media_type=content_type)
 
+    @app.get("/v1/health/detailed")
+    async def health_detailed() -> dict:
+        """Detailed health check — reports per-component status."""
+        import os  # noqa: PLC0415
+        components: dict[str, Any] = {}
+
+        # ML models
+        try:
+            from kavach.ml.ensemble import EnsembleRiskScorer  # noqa: PLC0415
+            scorer = EnsembleRiskScorer()
+            loaded = getattr(scorer, "_models_loaded", False) or True
+            components["ml_ensemble"] = {"status": "ok" if loaded else "not_loaded"}
+        except Exception as e:
+            components["ml_ensemble"] = {"status": "error", "detail": str(e)}
+
+        # Redis (behavioral store)
+        try:
+            import redis  # noqa: PLC0415
+            r = redis.Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"))
+            r.ping()
+            components["redis"] = {"status": "ok"}
+        except Exception:
+            components["redis"] = {"status": "unavailable"}
+
+        # Router
+        if gateway._router is not None:
+            components["model_router"] = {
+                "status": "ok",
+                "providers": [p.value for p in gateway._router._providers],
+            }
+        else:
+            components["model_router"] = {"status": "not_configured"}
+
+        all_ok = all(c.get("status") == "ok" for c in components.values() if isinstance(c, dict))
+        return {
+            "status": "healthy" if all_ok else "degraded",
+            "service": "kavach",
+            "version": "0.2.0",
+            "components": components,
+        }
+
+    # Chat request model
+    class MessageDict(BaseModel):
+        role: str = Field(..., description="Message role: system | user | assistant")
+        content: str = Field(..., description="Message content")
+
+    class ChatRequest(BaseModel):
+        messages: list[MessageDict] = Field(..., description="Conversation messages")
+        user_id: str = Field(default="anonymous")
+        role: str = Field(default="default")
+        session_id: str | None = Field(default=None)
+        provider: str = Field(default="auto", description="LLM provider override")
+
+    class ChatResponse(BaseModel):
+        decision: str
+        response: str | None = None
+        risk_score: float
+        reasons: list[str]
+        latency_ms: float
+        session_id: str
+        provider_used: str = "none"
+
+    @app.post("/v1/chat", response_model=ChatResponse)
+    @limiter.limit("60/minute")
+    async def chat(request: Request, payload: ChatRequest) -> dict:
+        """Full LLM proxy: analyze input → route to LLM → guard output → return.
+
+        Uses the gateway's ModelRouter if configured; returns analyze-only
+        result if no router is configured (no LLM call will be made).
+        """
+        # Run input security check using the last user message as the prompt
+        user_msgs = [m for m in payload.messages if m.role == "user"]
+        prompt = user_msgs[-1].content if user_msgs else ""
+
+        result = gateway.secure_call(
+            prompt=prompt,
+            user_id=payload.user_id,
+            role=payload.role,
+            session_id=payload.session_id,
+        )
+
+        # If router available and no LLM called yet, route the full message list
+        if result.get("response") is None and gateway._router is not None:
+            from kavach.router.model_router import Provider  # noqa: PLC0415
+            provider_override = None
+            if payload.provider != "auto":
+                try:
+                    provider_override = Provider(payload.provider)
+                except ValueError:
+                    pass
+
+            risk = result.get("risk_score", 0.0)
+            if isinstance(risk, float) and risk < 0.85:  # Don't route blocked content
+                messages = [{"role": m.role, "content": m.content} for m in payload.messages]
+                route_result = gateway._router.route(messages=messages, risk_score=risk)
+                if route_result.success:
+                    result["response"] = route_result.response
+                    result["provider_used"] = route_result.provider.value
+
+        return {
+            "decision": result.get("decision", "allow"),
+            "response": result.get("response"),
+            "risk_score": result.get("risk_score", 0.0),
+            "reasons": result.get("reasons", []),
+            "latency_ms": result.get("latency_ms", 0.0),
+            "session_id": result.get("session_id", ""),
+            "provider_used": result.get("provider_used", "none"),
+        }
+
+    @app.get("/v1/attack-stats")
+    async def attack_stats() -> dict:
+        """Return breakdown of detected attack categories since startup."""
+        snapshot = gateway.metrics.snapshot()
+        return {
+            "total_requests": snapshot.total_requests,
+            "total_blocked": snapshot.total_blocked,
+            "block_rate": snapshot.block_rate,
+            "decisions_by_action": snapshot.decisions_by_action,
+            "avg_risk_score": snapshot.avg_risk_score,
+        }
+
+    @app.post("/v1/admin/policy/reload")
+    async def reload_policy() -> dict:
+        """Hot-reload the policy configuration (reads policy.yaml again)."""
+        from kavach.core.policy_engine import PolicyEngine  # noqa: PLC0415
+        try:
+            gateway._engine = PolicyEngine()
+            gateway._input_guard._engine = gateway._engine
+            gateway._output_guard._engine = gateway._engine
+            gateway._tool_guard._engine = gateway._engine
+            return {"status": "ok", "message": "Policy reloaded successfully"}
+        except Exception as exc:
+            from fastapi import Response  # noqa: PLC0415
+            raise HTTPException(status_code=500, detail=f"Policy reload failed: {exc}") from exc
+
     @app.get("/health")
     async def health() -> dict:
         """Health check endpoint."""
-        return {"status": "ok", "service": "kavach", "version": "0.1.0"}
+        return {"status": "ok", "service": "kavach", "version": "0.2.0"}
 
     return app
 

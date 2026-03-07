@@ -1,0 +1,117 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kavach
+  labels:
+    app: kavach
+    version: "0.2.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: kavach
+  template:
+    metadata:
+      labels:
+        app: kavach
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8000"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: kavach
+          image: kavach:0.2.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: REDIS_URL
+              value: "redis://kavach-redis:6379"
+            - name: KAVACH_LOG_LEVEL
+              value: "info"
+          envFrom:
+            - secretRef:
+                name: kavach-api-keys
+                optional: true
+          resources:
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: kavach-data
+              mountPath: /app/data/trained_models
+              subPath: trained_models
+            - name: kavach-data
+              mountPath: /app/data/attack_vectors
+              subPath: attack_vectors
+      volumes:
+        - name: kavach-data
+          persistentVolumeClaim:
+            claimName: kavach-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kavach
+  labels:
+    app: kavach
+spec:
+  type: ClusterIP
+  selector:
+    app: kavach
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: http
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: kavach-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: kavach
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kavach-data-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

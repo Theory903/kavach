@@ -16,9 +16,10 @@ class Action(str, Enum):
     """Possible actions when a rule matches."""
 
     ALLOW = "allow"
-    BLOCK = "block"
+    MONITOR = "monitor"
     SANITIZE = "sanitize"
     REQUIRE_APPROVAL = "require_approval"
+    BLOCK = "block"
 
 
 class PromptLogMode(str, Enum):
@@ -43,8 +44,8 @@ class RolePolicy(BaseModel):
     allowed_tools: list[str] = Field(default_factory=lambda: ["*"])
     blocked_tools: list[str] = Field(default_factory=list)
     data_scope: list[str] = Field(default_factory=lambda: ["*"])
-    max_risk_score: float = Field(default=0.8, ge=0.0, le=1.0)
-    require_approval_above: float = Field(default=0.9, ge=0.0, le=1.0)
+    max_risk_score: float = Field(default=0.9, ge=0.0, le=1.0)
+    require_approval_above: float = Field(default=0.7, ge=0.0, le=1.0)
 
     def is_tool_allowed(self, tool_name: str) -> bool:
         """Check if a tool is permitted for this role."""
@@ -129,7 +130,7 @@ class Policy(BaseModel):
         return self.roles.get(role, RolePolicy(
             allowed_tools=[],
             blocked_tools=["*"],
-            max_risk_score=0.3,
+            max_risk_score=0.9,
         ))
 
     def validate_policy(self) -> list[str]:

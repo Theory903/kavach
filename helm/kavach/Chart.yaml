@@ -1,0 +1,14 @@
+apiVersion: v2
+name: kavach
+description: Universal AI Security Gateway — LLM firewall, policy engine, and observability
+type: application
+version: 0.2.0
+appVersion: "0.2.0"
+keywords:
+  - ai
+  - security
+  - llm
+  - gateway
+  - prompt-injection
+maintainers:
+  - name: Abhishek Jha

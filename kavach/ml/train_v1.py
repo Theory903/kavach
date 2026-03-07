@@ -113,6 +113,10 @@ def train_rl_advisor(epochs: int = 30) -> dict[str, Any]:
         data = list(TRAINING_DATA)
         random.shuffle(data)
 
+        batch_states = []
+        batch_actions = []
+        batch_rewards = []
+
         for sample in data:
             is_attack = sample.label != BENIGN
 
@@ -123,10 +127,10 @@ def train_rl_advisor(epochs: int = 30) -> dict[str, Any]:
             )
 
             rl_sugg = result.get("rl_suggestion", {})
-            state_index = rl_sugg.get("state_index")
+            state_vector = rl_sugg.get("state_vector")
             action_index = rl_sugg.get("action_index")
 
-            if state_index is not None and action_index is not None:
+            if state_vector is not None and action_index is not None:
                 action_taken = result.get("decision", "allow")
                 was_blocked = action_taken in ("block", "sanitize")
                 reward = advisor.compute_reward(
@@ -134,12 +138,21 @@ def train_rl_advisor(epochs: int = 30) -> dict[str, Any]:
                     actual_is_attack=is_attack,
                     was_blocked=was_blocked,
                 )
-                advisor.update(
-                    state_index=state_index,
-                    action_index=action_index,
-                    reward=reward,
-                )
+                
+                batch_states.append(np.array(state_vector, dtype=np.float32))
+                batch_actions.append(action_index)
+                batch_rewards.append(reward)
                 total_steps += 1
+                
+                # Train in chunks simulating a trajectory
+                if len(batch_states) >= 64:
+                    advisor.train_on_batch(batch_states, batch_actions, batch_rewards)
+                    batch_states.clear()
+                    batch_actions.clear()
+                    batch_rewards.clear()
+
+        if batch_states:
+             advisor.train_on_batch(batch_states, batch_actions, batch_rewards)
 
     advisor.save()
     elapsed = time.monotonic() - start
@@ -147,8 +160,8 @@ def train_rl_advisor(epochs: int = 30) -> dict[str, Any]:
     stats["elapsed_secs"] = round(elapsed, 1)
 
     log.info(
-        "RL training complete: %d updates, %.1f%% coverage, %.1fs",
-        stats["total_updates"], stats["coverage_pct"], elapsed,
+        "RL training complete: %d updates, %.1fs",
+        stats["total_updates"], elapsed,
     )
     return stats
 
@@ -217,13 +230,13 @@ def main() -> None:
     # ── Train RL ──
     if not args.skip_rl:
         print("\n" + "=" * 60)
-        print("STEP 2: TRAINING RL ADVISOR")
+        print("STEP 2: TRAINING PPO RL ADVISOR")
         print("=" * 60)
         rl_stats = train_rl_advisor(epochs=args.rl_epochs)
         print(f"\n  🧠 Results:")
-        print(f"     Updates:  {rl_stats['total_updates']:,}")
-        print(f"     Coverage: {rl_stats['coverage_pct']}%")
-        print(f"     Time:     {rl_stats['elapsed_secs']}s")
+        print(f"     Updates:     {rl_stats['total_updates']:,}")
+        print(f"     Architecture:{rl_stats['architecture']}")
+        print(f"     Time:        {rl_stats['elapsed_secs']}s")
 
     print("\n" + "=" * 60)
     print("✅ KAVACH V1 TRAINING COMPLETE")

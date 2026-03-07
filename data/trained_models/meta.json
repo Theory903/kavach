@@ -1,12 +1,7 @@
 {
-  "version": "v1.0",
-  "n_total": 679538,
-  "n_train": 577607,
-  "n_test": 101931,
+  "n_train": 8480,
+  "n_test": 1497,
   "n_features": 30,
-  "attack_ratio": 0.3610040939579538,
-  "gbm_test_accuracy": 0.8552942676908889,
-  "gbm_test_precision": 0.8458401305057096,
-  "gbm_test_recall": 0.7327028642861025,
-  "gbm_test_f1": 0.7852171127355331
+  "attack_ratio": 0.20276636263405834,
+  "gbm_test_accuracy": 0.8162992651970608
 }

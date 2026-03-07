@@ -91,6 +91,8 @@ class KavachLogger:
             identity: The Identity.to_dict() output.
             extra: Additional context to include.
         """
+        ml_comps = decision.get("ml_components", {})
+        
         entry: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "event": "kavach.decision",
@@ -101,6 +103,21 @@ class KavachLogger:
             "latency_ms": decision.get("latency_ms", 0.0),
             "session_id": decision.get("session_id", ""),
         }
+        
+        if ml_comps:
+            entry["model_scores"] = {
+                "rule": ml_comps.get("rule_score", 0.0),
+                "ml": ml_comps.get("ml_classifier_score", 0.0),
+                "vector": ml_comps.get("embedding_sim_score", 0.0)
+            }
+            entry["behavior_score"] = ml_comps.get("behavioral_multiplier", 1.0)
+            
+            intent_analysis = ml_comps.get("intent_analysis", {})
+            attack_class = ml_comps.get("attack_classification", {})
+            
+            # Prefer explicit attack classification, fallback to intent SLM or unknown
+            entry["attack_category"] = attack_class.get("category", intent_analysis.get("predicted_category", "unknown"))
+
 
         if prompt is not None:
             entry["prompt"] = self._prepare_prompt(prompt)

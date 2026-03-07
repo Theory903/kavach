@@ -1,11 +1,14 @@
 """Output guard — post-LLM validation layer.
 
-Scans LLM output for leaked secrets, API keys, and validates
-any tool calls the LLM suggests against the active policy.
+Scans LLM output for:
+- Leaked secrets and API keys (regex, always-on)
+- PII entities: PERSON, EMAIL, PHONE, CREDIT_CARD, SSN, IP etc. (Presidio, optional)
+- LLM-suggested tool calls (validated against policy)
 """
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -15,6 +18,31 @@ from typing import Any, ClassVar
 from kavach.core.identity import Identity
 from kavach.core.policy_engine import Decision, PolicyEngine
 from kavach.policies.validator import Action, Policy
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Presidio lazy-loader
+# ---------------------------------------------------------------------------
+
+_presidio_analyzer = None
+_presidio_anonymizer = None
+
+
+def _get_presidio():
+    """Lazily import Presidio — returns (analyzer, anonymizer) or (None, None)."""
+    global _presidio_analyzer, _presidio_anonymizer  # noqa: PLW0603
+    if _presidio_analyzer is not None:
+        return _presidio_analyzer, _presidio_anonymizer
+    try:
+        from presidio_analyzer import AnalyzerEngine  # noqa: PLC0415
+        from presidio_anonymizer import AnonymizerEngine  # noqa: PLC0415
+        _presidio_analyzer = AnalyzerEngine()
+        _presidio_anonymizer = AnonymizerEngine()
+        logger.info("[OutputGuard] Presidio PII engine loaded")
+    except ImportError:
+        logger.debug("[OutputGuard] presidio not installed — using regex-only PII detection")
+    return _presidio_analyzer, _presidio_anonymizer
 
 
 @dataclass
@@ -61,6 +89,11 @@ class OutputGuard:
 
     def __init__(self, policy: str | Path | dict[str, Any] | Policy | None = None) -> None:
         self._engine = PolicyEngine(policy)
+        # PII entities Presidio should detect and redact
+        self._pii_entities = [
+            "PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "CREDIT_CARD",
+            "US_SSN", "IP_ADDRESS", "IBAN_CODE", "MEDICAL_LICENSE",
+        ]
 
     def scan(
         self,
@@ -94,8 +127,30 @@ class OutputGuard:
 
         decision = Decision()
         if secrets_found:
+            # Hard Guarantee: If an output tries to dump multiple types of secrets
+            # or a massive volume, we block entirely rather than trusting redaction.
+            if len(secrets_found) > 1 or len(set(secrets_found)) > 1:
+                decision.action = Action.BLOCK
+                decision.reasons = [f"hard_guarantee_breach: Multiple leaked secrets blocked: {', '.join(secrets_found)}"]
+            else:
+                decision.action = Action.SANITIZE
+                decision.reasons = [f"secrets_detected: {', '.join(secrets_found)}"]
+
+        # Presidio deep PII scan (second layer, runs after regex)
+        pii_found = self._run_presidio_scan(redacted)
+        if pii_found:
+            for entity_type, count in pii_found.items():
+                secrets_found.append(f"pii:{entity_type}(×{count})")
+                # Presidio already redacted in-place via anonymizer
+            redacted = self._redact_with_presidio(redacted)
+
+        if secrets_found and not decision.is_blocked:
             decision.action = Action.SANITIZE
-            decision.reasons = [f"secrets_detected: {', '.join(secrets_found)}"]
+            if len(secrets_found) > 1:
+                decision.action = Action.BLOCK
+                decision.reasons = [f"hard_guarantee_breach: Multiple PII/secrets: {', '.join(secrets_found[:5])}"]
+            elif not decision.reasons:
+                decision.reasons = [f"pii_detected: {', '.join(secrets_found)}"]
 
         latency = (time.monotonic() - start) * 1000
 
@@ -105,6 +160,52 @@ class OutputGuard:
             redacted_output=redacted if secrets_found else None,
             latency_ms=latency,
         )
+
+    def pii_scan(self, text: str) -> dict[str, Any]:
+        """Standalone PII scan — returns entity map without making a Decision.
+
+        Useful for audit logging without enforcement.
+
+        Args:
+            text: Text to scan.
+
+        Returns:
+            Dict mapping entity_type -> count.
+        """
+        return self._run_presidio_scan(text)
+
+    def _run_presidio_scan(self, text: str) -> dict[str, int]:
+        """Run Presidio analyzer, return {entity_type: count}."""
+        analyzer, _ = _get_presidio()
+        if analyzer is None:
+            return {}
+        try:
+            results = analyzer.analyze(
+                text=text,
+                entities=self._pii_entities,
+                language="en",
+            )
+            entity_counts: dict[str, int] = {}
+            for r in results:
+                entity_counts[r.entity_type] = entity_counts.get(r.entity_type, 0) + 1
+            return entity_counts
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"[OutputGuard] Presidio scan error: {exc}")
+            return {}
+
+    def _redact_with_presidio(self, text: str) -> str:
+        """Redact PII using Presidio anonymizer."""
+        analyzer, anonymizer = _get_presidio()
+        if analyzer is None or anonymizer is None:
+            return text
+        try:
+            results = analyzer.analyze(text=text, entities=self._pii_entities, language="en")
+            if not results:
+                return text
+            return anonymizer.anonymize(text=text, analyzer_results=results).text
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"[OutputGuard] Presidio redaction error: {exc}")
+            return text
 
     def validate_tool_calls(
         self,

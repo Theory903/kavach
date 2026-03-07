@@ -455,6 +455,37 @@ def main() -> None:
         print(f"  Features:  {ml_meta['n_features']}")
         print(f"  Train/Test: {ml_meta['n_train']}/{ml_meta['n_test']}")
 
+    # ── Step 3.5: Train OOD Detector ──
+    print("\n" + "=" * 60)
+    print("STEP 3.5: TRAINING OOD DETECTOR")
+    print("=" * 60)
+    try:
+        from kavach.ml.embeddings import EmbeddingRiskScorer
+        from kavach.ml.ood_detector import OODDetector
+        
+        scorer = EmbeddingRiskScorer()
+        scorer.load_and_encode_corpus()
+        benign_texts = [t for t, l in zip(all_texts, all_labels) if l == 0]
+        
+        # OOD sampling ceiling
+        if len(benign_texts) > 5000:
+            benign_texts = random.sample(benign_texts, 5000)
+            
+        print(f"  Extracting ONNX embeddings for {len(benign_texts)} benign samples...")
+        benign_embeddings = []
+        for text in benign_texts:
+            emb = scorer.encode(text)
+            if emb is not None:
+                benign_embeddings.append(emb)
+                
+        if benign_embeddings:
+            ood = OODDetector(model_dir=str(save_dir))
+            ood.fit(np.array(benign_embeddings))
+            ood.save()
+            print(f"  OOD Detector fitted on {len(benign_embeddings)} semantic vectors.")
+    except Exception as e:
+        print(f"  OOD Detector training skipped/failed: {e}")
+
     # ── Step 4: Train RL Advisor ──
     if not args.skip_rl:
         print("\n" + "=" * 60)

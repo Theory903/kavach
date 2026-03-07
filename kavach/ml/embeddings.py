@@ -1,5 +1,4 @@
 """Embedding similarity scorer using ONNX Runtime.
-
 Uses a lightweight ONNX model (Xenova/all-MiniLM-L6-v2) to extract
 embeddings without blocking the GIL or requiring 1.5GB of PyTorch.
 """
@@ -128,6 +127,14 @@ class EmbeddingRiskScorer:
         except Exception as e:
             logger.error("Error setting up ONNX embedding scorer: %s", e)
             self.is_loaded = False
+
+    def encode(self, prompt: str) -> np.ndarray | None:
+        """Return the raw embedding vector for a single prompt, or None if unavailable."""
+        if not self.is_loaded or self._session is None:
+            return None
+        if not prompt.strip():
+            return None
+        return self._encode_batch([prompt])[0]
 
     def predict_risk(self, prompt: str) -> float:
         """Score a prompt based on maximum similarity to any known attack."""
