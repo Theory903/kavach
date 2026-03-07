@@ -1,13 +1,31 @@
-# 🛡️ Kavach — The Zero-Trust AI Security Gateway 
+# 🛡️ Kavach — Zero-Trust Firewall for LLM Applications
 
 ![Kavach Architecture](https://img.shields.io/badge/Security-Zero_Trust-blue) 
 ![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)
 ![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
 ![Built for](https://img.shields.io/badge/Built_for-Enterprise_GenAI-purple)
 
-**A high-performance, policy-driven security gateway that natively protects LLM applications against adversarial prompts, data exfiltration, and unauthorized actions in real-time.**
+**Protect AI agents from prompt injection, jailbreaks, and data leaks with a sub-15ms security gateway.**
 
 Kavach acts as an ultra-low-latency (< 15ms) firewall between your applications and your LLMs. Driven by an offline ML ensemble, cryptographic auditing, and strict Role-Based Access Control (RBAC), it allows enterprises to safely deploy Agentic AI and standard Generative AI into regulated environments with absolute confidence.
+
+---
+
+## 🏛️ Architecture
+
+```text
+Client App
+   |
+   v
+Kavach Gateway
+   |
+   +---- ML Threat Detection
+   +---- RBAC Policy Engine
+   +---- Audit Chain
+   |
+   v
+LLM Provider
+```
 
 ---
 
@@ -33,6 +51,8 @@ Designed for absolute resilience under extreme loads. Kavach gracefully degrades
 ---
 
 ## 🚀 The 2-Minute Demo
+
+![Kavach Action Demo](demo.gif)
 
 Run this terminal split-screen to see speed and certainty in action:
 
@@ -66,6 +86,14 @@ curl -X POST http://localhost:8000/v1/analyze \
   -d '{"prompt": "Рrοm⍴t  Iոjeсtiοո  tеst"}'
 # 🔴 Result: "decision": "block", "matched_rules": ["apt_homoglyph_detected"]
 ```
+
+---
+
+## 🎯 Real-World Use Case
+
+**Scenario: Secure a LangChain agent that has database access.**
+
+Prevent prompt injection from triggering destructive tools. Instead of relying on the LLM to understand that it shouldn't drop tables when tricked, Kavach evaluates the prompt offline, strictly enforcing RBAC at the gateway level, and blocking any unauthorized tool execution before the model ever sees the request.
 
 ---
 
@@ -189,6 +217,25 @@ To dive deeper into the underlying architecture and capabilities:
 - [Framework Integrations](docs/INTEGRATIONS.md)
 - [Policy Engine Specification](docs/POLICY.md)
 - [API Reference](docs/API.md)
+
+## 🗺️ Roadmap
+
+- **v1.2:** Vector anomaly detection
+- **v1.3:** Plugin security modules
+- **v2.0:** Distributed gateway cluster
+
+---
+
+## 🤝 Contributing
+
+We are looking for contributors interested in:
+- LLM security research
+- Distributed systems
+- AI threat detection
+
+Check out our [Good First Issues](https://github.com/theory903/kavach/issues?q=is%3Aissue+is%3Aopen+label%3A%22good-first-issue%22) to get started!
+
+---
 
 ## 📄 License
 
