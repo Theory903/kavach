@@ -1,0 +1,12 @@
+# These owners will be the default reviewers for pull requests in those directories
+
+# Global owners
+*       @theory903
+
+# Core Gateway & ML models
+/kavach/ml/      @theory903
+/kavach/core/    @theory903
+
+# Documentation
+/docs/           @theory903
+/README.md       @theory903
